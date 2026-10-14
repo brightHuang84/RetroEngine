@@ -1,4 +1,4 @@
-# retro_engine —— 可移植的 2D 复古小引擎（PC/SDL2 · UEFI 裸机 · NES）
+# retro_engine —— 可移植的 2D 复古小引擎（PC/SDL2 · UEFI 裸机 · NES · GBA）
 
 **游戏逻辑在各平台上完全相同，只有构建方式不同。** 引擎和游戏都用 C89 编写（可以用 cc65 编译），只用整数和定点数，不使用 malloc。所有限制以 NES 为准：屏幕 256x240、8x8 tile、最多 64 个精灵、2KB RAM、NTSC 60Hz。
 
@@ -14,12 +14,14 @@ flowchart TD
   games --> E[engine/engine.c<br>背景/属性/文字, 精灵/metasprite, 输入边沿,<br>场景, 四通道乐曲+音效, 定点数/AABB/地图碰撞]
   E -->|engine/backend.h| RS[render/render_soft.c<br>模拟 NES PPU：2 张 nametable, 属性, 64 精灵, 翻转, 滚动]
   E -->|engine/backend.h| RN[render/render_nes.c<br>VRAM 更新队列 → NMI/vblank, OAM DMA, APU 四通道]
+  E -->|engine/backend.h| RG[render/render_gba.c<br>mode 0 4bpp, BG+OBJ, HBlank 分屏, DMG 四通道]
   RS --> SDL[platform/sdl<br>窗口 3x, 键盘, 方波/三角波/噪声混合]
   RS --> UEFI[platform/uefi<br>GOP 缩放居中, SimpleTextInput, Stall, PC 喇叭]
   RN --> NES[platform/nes<br>crt0.s, nes.cfg, 手柄]
-  A[games/&lt;name&gt;/tiles.png + *.txt/*.csv 地图] --> T[tools/build_assets.py<br>png2chr.py + map2c.py]
+  RG --> GBA[platform/gba<br>crt0.s, gba.ld, 手柄, vblank]
+  A[games/&lt;name&gt;/tiles.png + *.txt/*.csv 地图] --> T[tools/build_assets.py<br>png2chr.py + png2gba.py + map2c.py]
   T --> CHR[game.chr → NES]
-  T --> CA[tiles.c / maps.c / assets.h → 所有平台]
+  T --> CA[tiles.c / tiles_gba.c / maps.c / assets.h → 各平台]
   S[games/&lt;name&gt;/songs.txt] --> TM[tools/txt2mus.py]
   TM --> MU[music.c / music.h → 所有平台]
   classDef g fill:#ffd
@@ -28,12 +30,12 @@ flowchart TD
 ## 目录结构
 ```
 engine/   engine.h（公开 API） backend.h（后端接口） engine.c
-render/   render_soft.c/.h（PC 和 UEFI 共用） render_nes.c
-platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,nes.cfg,nes.h}
+render/   render_soft.c/.h（PC 和 UEFI 共用） render_nes.c  render_gba.c
+platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,nes.cfg,nes.h}  gba/{main_gba.c,crt0.s,gba.ld,gba.h}
 games/    breakout/{game.c,tiles.png,play.txt,songs.txt}  platformer/{game.c,tiles.png,level.txt,songs.txt}
-tools/    build_assets.py png2chr.py map2c.py txt2mus.py make_sheets.py mkimg.sh fceux_test.lua qemu_test.sh
+tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py txt2mus.py make_sheets.py mkimg.sh fceux_test.lua qemu_test.sh
 lib/      none.lib（cc65 运行库副本，用于离线编译）
-build/<game>/{pc,uefi,nes,gen}/   编译输出
+build/<game>/{pc,uefi,nes,gba,gen}/   编译输出
 shots/    测试截图
 ```
 
@@ -138,11 +140,12 @@ noise vol 6 mode 0
 
 这两个工具的四个旋律通道和这里一一对应：pulse1、pulse2、triangle、noise。FamiStudio 可以导出文本，FamiTracker 也可以导出文本或 MIDI。眼下没有导入器，把音高、时值和循环点抄进 `songs.txt` 即可。DPCM 采样不在范围内。
 
-**三个后端**
+**四个后端**
 
 - NES：每帧写 `$4000`–`$400F`，并打开 `$4015` 的低四位。只有音高的高 3 位变了，或者一个通道从静音变成发声时，才写 `$4003` / `$400B` / `$400F`，避免每帧重置相位发出杂音。
 - SDL：回调里用同一套周期合成方波（占空比序列）、32 步三角波和噪声 LFSR，混合成 44100Hz 单声道。`RETRO_WAV=文件.wav` 时不打开声卡，改为每个引擎帧写 735 个采样。
 - UEFI：PC 喇叭（端口 `0x61`，PIT 通道 2 `0x42`）。同时只能响一个音，优先级是 pulse2、pulse1、三角波，这样音效能盖过旋律。噪声不走喇叭。QEMU 需要把 PC speaker 接到音频设备，例如 `-audiodev wav,id=snd,path=uefi.wav -machine pcspk-audiodev=snd`。没有这块设备时喇叭是静音的。
+- GBA：DMG 音源的四路。方波 1、方波 2 的占空比和 NES 一样（12.5/25/50/75%）。三角波写进 wave RAM，音量分成 100/50/25% 三档。噪声用最接近的多项式计数器；NES 的 `duty` 最低位是短模式。只有音高变了或者从静音变成发声时才重新触发，避免每帧咔哒一声。音效仍占方波 2。GBA 方波最低大约 64Hz，比 NES 的最低音稍高，那些音会被夹到最低。最快的噪声（N0）大约偏高 17%。
 
 ## 一步一步做一个新游戏
 1. `mkdir games/mygame`
@@ -161,7 +164,7 @@ noise vol 6 mode 0
    - 生成的代码包括 `map_level[]`、`map_level_attr[]`、`map_level_flags[]`，以及 `MAP_LEVEL_W/H`
 4. 写 `songs.txt`（至少一首循环；`make` 会用它生成 `music.h`）。格式见上面的「音频」。
 5. 写 `game.c`：只 `#include "../../engine/engine.h"`、`"assets.h"` 和 `"music.h"`，实现场景、`game_boot()`、`game_autopilot()`。要背景音乐就在场景 `init` 里调用 `music_play(MUS_...)`。
-6. `make GAME=mygame pc`（以及 uefi、img、nes、all）
+6. `make GAME=mygame pc`（以及 uefi、img、nes、gba、all）
 
 **保持可移植的规则**：不使用 `#ifdef 平台`、浮点数、malloc、libc；变量声明放在代码块开头（C89）；大的常量数据加 `const`（会放进 ROM）；每帧的背景修改要少（大改动放在场景 init 里做）；HUD 如果要跟着滚动，就用精灵来画。
 
@@ -175,20 +178,27 @@ noise vol 6 mode 0
 - `game.chr`：8KB 的 NES 图案表（ca65 通过 `.incbin` 引入）
 - `tiles.c`：`chr_tiles[4096]`，内容和 CHR 一样，给软件渲染器用
 - `maps.c` 和 `assets.h`：地图、属性表、碰撞标志
+- `tiles_gba.c`：`gba_tiles[8192]`，同一张图的 GBA 4bpp（每 tile 32 字节，低 nibble 是左边的像素）
 
-所以每个游戏只有一份图形源（`tiles.png`）和一份地图源，三个平台的画面完全对应。`make` 会自动运行这一步，也会用 `tools/txt2mus.py` 把 `songs.txt` 编成 `music.c`。
+所以每个游戏只有一份图形源（`tiles.png`）和一份地图源，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会用 `tools/txt2mus.py` 把 `songs.txt` 编成 `music.c`。
 
 ## 在 Ubuntu 26.04 上安装和编译
 ```sh
 sudo apt install build-essential python3 python3-pil libsdl2-dev gnu-efi mtools dosfstools \
-                 qemu-system-x86 ovmf cc65 fceux
+                 qemu-system-x86 ovmf cc65 fceux gcc-arm-none-eabi
 # 如果 26.04 上没有 libsdl2-dev，改装 libsdl2-compat-dev（提供同样的 sdl2-config 和头文件）
-make GAME=breakout   pc|uefi|img|nes|all
-make GAME=platformer pc|uefi|img|nes|all
-make games-all       # 两个游戏 × 所有平台
+# 想运行 GBA ROM：sudo apt install mgba-sdl
+#   可执行文件是 /usr/games/mgba（不一定在默认 PATH 里）
+make GAME=breakout   pc|uefi|img|nes|gba|all
+make GAME=platformer pc|uefi|img|nes|gba|all
+make games-all       # 两个游戏 × pc/uefi/img/nes（不含 gba，避免没有 ARM 工具链的机器失败）
 make clean           # 删除 build/（想完整重新编译时先执行它）
 ```
-输出文件：`build/<game>/pc/<game>`、`build/<game>/uefi/BOOTX64.EFI` 和 `<game>.img`、`build/<game>/nes/<game>.nes`
+输出文件：`build/<game>/pc/<game>`、`build/<game>/uefi/BOOTX64.EFI` 和 `<game>.img`、`build/<game>/nes/<game>.nes`、`build/<game>/gba/<game>.gba`
+
+GBA 不用 devkitARM，也不用 libtonc：Ubuntu 的仓库里没有这两个。工具链是 `gcc-arm-none-eabi`（`-marm -mcpu=arm7tdmi -ffreestanding -nostdlib`），启动代码和链接脚本在 `platform/gba/`。`all` 不包含 `gba`，没有这套编译器时另外三个平台照常能编。
+
+卡头由 `tools/gbafix.py` 写入 12 字节标题和补码校验（`0xB2 = 0x96`）。它不写入任天堂 Logo。如果 PATH 里有 devkitARM 的 `gbafix`，Makefile 会改用那个，Logo 会写进去，真机 BIOS 才能过启动画面。mGBA 自带的 BIOS 不检查 Logo，可以直接运行这里编出来的 ROM。
 
 ## 运行
 - PC：`./build/platformer/pc/platformer`
@@ -203,19 +213,31 @@ make clean           # 删除 build/（想完整重新编译时先执行它）
   ```
   写入 U 盘（**会清空设备**）：`sudo dd if=build/breakout/uefi/breakout.img of=/dev/sdX bs=4M conv=fsync status=progress`，关闭 Secure Boot，以 UEFI 方式启动。
 - NES：`fceux build/platformer/nes/platformer.nes`，也可以用 Mesen；真机可以用 EverDrive 等烧录卡（mapper 0 / NROM）。
+- GBA：`mgba build/breakout/gba/breakout.gba`（或 `/usr/games/mgba`）。主循环每进一次 vblank 走一帧，大约 59.73Hz，引擎仍按 60Hz 计。自动演示 ROM（不读手柄，改喂 `game_autopilot()`）：`make GAME=breakout gba-auto`，输出 `build/breakout/gba/breakout-auto.gba`。
 - 自动测试：`tools/qemu_test.sh <game> shots/uefi_<game>`；`RETRO_GAME=<game> RETRO_SHOTS=$PWD/shots/nes_<game> fceux --loadlua tools/fceux_test.lua build/<game>/nes/<game>.nes`（无界面时需要配合 Xvfb）
 
 ## 操作
-| 手柄 | PC 键盘 | UEFI 键盘 | NES |
-|---|---|---|---|
-| 方向 | 方向键 / WASD | 方向键 / wasd | 十字键 |
-| A（跳跃、发球） | Z / 空格 | 空格 / z | A |
-| B | X | x | B |
-| Start | Enter | Enter | Start |
-| Select | 右 Shift / Tab | Tab | Select |
-| 退出 | Esc | Esc | — |
+| 手柄 | PC 键盘 | UEFI 键盘 | NES | GBA |
+|---|---|---|---|---|
+| 方向 | 方向键 / WASD | 方向键 / wasd | 十字键 | 十字键 |
+| A（跳跃、发球） | Z / 空格 | 空格 / z | A | A |
+| B | X | x | B | B |
+| Start | Enter | Enter | Start | Start |
+| Select | 右 Shift / Tab | Tab | Select | Select |
+| 退出 | Esc | Esc | — | — |
+
+GBA 的 L / R 没有接到引擎。
 
 Breakout：左右移动挡板，A 或 Start 发球。Platformer：左右跑动，A 跳跃（按得越久跳得越高），踩敌人可以把它消灭，收集全部 6 枚金币就胜利，掉进坑里会损失一条命。
+
+## GBA 画面
+
+面板是 240x160，引擎的逻辑画面是 256x240。仿射背景是 8bpp，对不上这套 4 色 tile，所以用 mode 0（普通 4bpp），不缩放。
+
+- 左右各裁掉 8 像素：`BG0HOFS = scroll + 8`。HUD 上靠两边的数字（比如 platformer 最右边的命数）仍在屏幕内。
+- 上下用 HBlank 中断切成两段。最上面 16 行永远显示地图的 y = 0..15，Breakout 的 `SCORE` / `LIVES` 不会跟着滚走。剩下 144 行显示 `view_y .. view_y+143`。
+- `view_y` 跟着逻辑 y ≥ 24 的精灵走，并夹在 16..96。差得不远时取中点；上下拉开超过 130 像素而且上面还有东西（球打进砖里）时跟着上面，挡板会暂时出画面，球回到下方再把挡板找回来。没有这类精灵时（标题）取 140，三行标题都看得到，装饰用的砖会裁掉一截。
+- Platformer 的 HUD 是精灵，画在 y = 8 和 y = 20，不参与取景，钉在屏幕上方。
 
 ## 已知限制
 - UEFI 没有“按键松开”事件：引擎会在按键事件之后把它当作按住几帧（方向键 8 帧），持续按住要靠键盘自动重复。UEFI 只用 PC 喇叭，同一时刻一个音（pulse2 优先，然后 pulse1，然后三角波），噪声听不到。QEMU 要加 `-machine pcspk-audiodev=...` 才能出声。
@@ -224,4 +246,5 @@ Breakout：左右移动挡板，A 或 Start 发球。Platformer：左右跑动�
 - NES 每条扫描线最多 8 个精灵，背景色块是 16x16；fceux 默认会裁掉画面最上和最下各 8 行（屏幕顶部的 HUD 会被切掉一部分）。
 - 软件渲染器的 RGB 调色板和 fceux 的不完全一样，颜色会略有差异。
 - 修改背景 tile 不会自动更新碰撞地图（`tm_bind` 绑定的是 ROM 里的地图）。
-- 只支持水平滚动，最多两屏（512 像素）；没有画面分割，所以滚动场景的 HUD 要用精灵来画。
+- 只支持水平滚动，最多两屏（512 像素）。GBA 以外的平台没有画面分割，所以滚动场景的 HUD 要用精灵来画。GBA 额外把地图最上面两行钉在屏幕顶部，见上面的「GBA 画面」。
+- GBA 不写入任天堂 Logo，真机原装 BIOS 会停在启动画面；模拟器和烧录卡上自带的 BIOS 替换一般能过。噪声音高是近似值。L/R 未使用。
