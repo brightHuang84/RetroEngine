@@ -55,9 +55,24 @@ const Scene *game_boot(void);                 /* provided by the game: first sce
 u8 game_autopilot(void);                      /* provided by the game: test-mode input (PC test mode) */
 extern u8 frame_count;
 
-/* ---------- sound (pulse channel square beeps) ---------- */
+/* ---------- audio: 4 NES APU channels (no DPCM) ---------- */
+#define CH_PULSE1 0
+#define CH_PULSE2 1
+#define CH_TRI    2
+#define CH_NOISE  3
+/* A song is four independent note streams. NULL channel = silent.
+   loop == 0xFFFF plays once; otherwise it is the byte offset to jump to at the end.
+   Pulse/triangle events are note indices (1 = C1 .. 84 = B7, 0 = rest) plus a duration.
+   Noise events use 1..16 for hardware period N0..N15. Streams end with 0xFF. */
+typedef struct Track { const u8 *data; u16 loop; u8 duty; u8 vol; } Track;
+typedef struct Song { const Track *ch[4]; } Song;
 enum { SFX_NONE, SFX_BLIP, SFX_HIT, SFX_COIN, SFX_JUMP, SFX_LOSE, SFX_WIN };
-void sfx(u8 id);
+void sfx(u8 id);                              /* steals pulse2 until the effect ends; ids unchanged */
+void music_play(u8 id);                       /* game supplies music_lookup */
+void music_stop(void);
+void music_pause(u8 on);                      /* nonzero freezes the sequencer and holds current notes */
+void music_volume(u8 vol);                    /* 0..15, music only; sound effects stay full */
+const Song *music_lookup(u8 id);              /* provided by the game (generated from songs.txt) */
 
 /* ---------- fixed point & physics ---------- */
 typedef s16 fx;                 /* 12.4 fixed point: world up to +-2047 px */

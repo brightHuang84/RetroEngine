@@ -1,6 +1,7 @@
 /* Breakout on retro_engine. Uses only engine.h - no platform code. */
 #include "../../engine/engine.h"
 #include "assets.h"
+#include "music.h"
 
 #define BR_COLS 14
 #define BR_ROWS 6
@@ -40,6 +41,7 @@ static void title_init(void){
   bg_text(10, 17, "PRESS START");
   bg_text(5, 25, "RETRO ENGINE DEMO 2026");
   for(c = 0; c < 32; c += 2){ bg_attr(c, 13, 3); bg_attr(c, 17, 3); bg_attr(c, 25, 3); }
+  music_play(MUS_TITLE);
 }
 static void title_update(void){ if(pad_pressed & (BTN_START | BTN_A)){ sfx(SFX_BLIP); scene_go(&play_scene); } }
 static void title_draw(void){ if(frame_count & 32) spr(124, 140, T_BALL, 0); }
@@ -56,6 +58,7 @@ static void play_init(void){
   }
   left = BR_ROWS * BR_COLS; score = 0; lives = 3; padx = (SCREEN_W - PAD_W) / 2;
   serve(); hud();
+  music_play(MUS_PLAY);
 }
 static void play_update(void){
   u8 cx, cy, r, c, oy; s8 off;
@@ -99,6 +102,7 @@ const Scene play_scene = { play_init, play_update, play_draw };
 
 /* ---------- end ---------- */
 static void end_init(void){
+  music_stop();
   bg_fill(0, 0, 32, 30, ' ');
   bg_text(won ? 12 : 11, 12, won ? "YOU WIN!" : "GAME OVER");
   bg_text(11, 15, "SCORE:"); bg_number(17, 15, score, 5);

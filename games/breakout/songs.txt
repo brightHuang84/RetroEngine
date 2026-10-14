@@ -1,0 +1,58 @@
+# Breakout. Four channels stay the same length so the loop does not drift.
+# pulse2 is the harmony; sound effects borrow it and this part comes back after.
+
+song title
+tempo 128
+
+pulse1 duty 2 vol 10
+  E5 8 G5 8 A5 8 G5 8 C5 8 D5 8 E5 8 D5 8
+  C5 8 B4 8 C5 8 D5 8 E5 8 R 8 G5 8 R 8
+
+pulse2 duty 1 vol 5
+  C4 4 E4 4 G4 4 E4 4
+  A3 4 C4 4 E4 4 R 4
+
+triangle vol 15
+  C3 4 G3 4 A3 4 G3 4
+  F3 4 C3 4 G2 4 C3 4
+
+noise vol 6
+  N1 8 N12 8 N1 8 N12 8
+  N1 8 N12 8 N1 8 N12 8
+  N1 8 N12 8 N1 8 N12 8
+  N1 8 N12 8 N1 8 N12 8
+
+song play
+tempo 150
+
+pulse1 duty 2 vol 10
+  C4 16 E4 16 G4 16 C5 16 E4 16 G4 16 C5 16 E5 16
+  G4 16 E4 16 C4 16 E4 16 G4 16 E4 16 C4 16 G3 16
+  A3 16 C4 16 E4 16 A4 16 C4 16 E4 16 A4 16 C5 16
+  E4 16 C4 16 A3 16 C4 16 E4 16 C4 16 A3 16 E3 16
+  F3 16 A3 16 C4 16 F4 16 A3 16 C4 16 F4 16 A4 16
+  C4 16 A3 16 F3 16 A3 16 C4 16 A3 16 F3 16 C3 16
+  G3 16 B3 16 D4 16 G4 16 B3 16 D4 16 G4 16 B4 16
+  D4 16 B3 16 G3 16 B3 16 D4 16 G4 16 F4 16 E4 16
+
+pulse2 duty 1 vol 5
+  C4 4 E4 4 G4 4 E4 4
+  A3 4 C4 4 E4 4 C4 4
+  F3 4 A3 4 C4 4 A3 4
+  G3 4 B3 4 D4 4 B3 4
+
+triangle vol 15
+  C3 2 G2 2
+  A2 2 E2 2
+  F2 2 C3 2
+  G2 2 D3 2
+
+noise vol 6
+  N1 8 N14 8 N1 8 N8 8
+  N1 8 N14 8 N1 8 N8 8
+  N1 8 N14 8 N1 8 N8 8
+  N1 8 N14 8 N1 8 N8 8
+  N1 8 N14 8 N1 8 N8 8
+  N1 8 N14 8 N1 8 N8 8
+  N1 8 N14 8 N1 8 N8 8
+  N1 8 N14 8 N1 8 N8 8

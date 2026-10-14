@@ -67,7 +67,20 @@ void spr_number(s16 x, s16 y, u16 v, u8 d, u8 a){ spr_text(x, y, fmt(v, d), a); 
 /* ---- scenes ---- */
 void scene_go(const Scene *s){ next = s; }
 
-/* ---- sound: tiny sequencer, one pulse channel ---- */
+/* ---- audio: music on 4 APU channels, sfx borrows pulse2 ---- */
+/* NTSC pulse timer, index 1 = C1 ... 84 = B7. t = CPU/(16*f)-1, f = 440*2^((midi-69)/12).
+   Pulse hardware is 11-bit, so notes below A1 are clamped when written. Triangle keeps
+   the full value and halves it, which is the right timer for the same pitch. */
+static const u16 note_period[85] = {
+  0,
+  /* C1 */ 3419,3228,3046,2875,2714,2561,2418,2282,2154,2033,1919,1811,
+  /* C2 */ 1709,1613,1523,1437,1356,1280,1208,1140,1076,1016,959,905,
+  /* C3 */ 854,806,761,718,678,640,604,570,538,507,479,452,
+  /* C4 */ 427,403,380,359,338,319,301,284,268,253,239,225,
+  /* C5 */ 213,201,189,179,169,159,150,142,134,126,119,112,
+  /* C6 */ 106,100,94,89,84,79,75,70,66,63,59,56,
+  /* C7 */ 52,49,47,44,41,39,37,35,33,31,29,27
+};
 static const u16 sfx_data[] = {   /* (period, frames) pairs, 0 terminated; index table below */
   0,
   0x0FD, 3, 0,                          /* BLIP */
@@ -78,13 +91,84 @@ static const u16 sfx_data[] = {   /* (period, frames) pairs, 0 terminated; index
   0x1AB, 6, 0x153, 6, 0x11D, 6, 0x0D5, 16, 0 /* WIN */
 };
 static const u8 sfx_start[] = { 0, 1, 4, 9, 14, 21, 28 };
-static u8 sfx_pos, sfx_timer;
-void sfx(u8 id){ if(id && id <= SFX_WIN){ sfx_pos = sfx_start[id]; sfx_timer = 0; } }
-static void sfx_tick(void){
-  if(!sfx_pos) return;
-  if(sfx_timer){ if(--sfx_timer) return; }
-  if(sfx_data[sfx_pos] == 0){ sfx_pos = 0; snd_hw(0, 0); return; }
-  snd_hw(sfx_data[sfx_pos], 10); sfx_timer = (u8)sfx_data[sfx_pos + 1]; sfx_pos += 2;
+static const Track *tr[4];
+static u16 mus_pos[4], mus_period[4];
+static u8 mus_timer[4], mus_gate[4];
+static u8 mus_paused, mus_master;
+static u8 sfx_pos, sfx_left, sfx_on;
+static u16 sfx_period;
+
+void sfx(u8 id){
+  if(id && id <= SFX_WIN){ sfx_pos = sfx_start[id]; sfx_left = 0; sfx_on = 1; }
+}
+void music_play(u8 id){
+  const Song *s = music_lookup(id);
+  u8 i;
+  mus_paused = 0;
+  for(i = 0; i < 4; i++){
+    tr[i] = (s && s->ch[i]) ? s->ch[i] : 0;
+    mus_pos[i] = 0; mus_timer[i] = 0; mus_gate[i] = 0; mus_period[i] = 0;
+  }
+}
+void music_stop(void){
+  u8 i;
+  for(i = 0; i < 4; i++){ tr[i] = 0; mus_gate[i] = 0; mus_timer[i] = 0; }
+}
+void music_pause(u8 on){ mus_paused = on ? 1 : 0; }
+void music_volume(u8 v){ mus_master = (v > 15) ? 15 : v; }
+
+static void mus_step(u8 i){
+  const Track *t; u8 n, d, guard; u16 p, half;
+  if(mus_paused) return;
+  t = tr[i];
+  if(!t || !t->data){ mus_gate[i] = 0; return; }
+  if(mus_timer[i]){ mus_timer[i]--; return; }
+  guard = 0;
+  for(;;){
+    if(guard++ > 4){ tr[i] = 0; mus_gate[i] = 0; return; }
+    n = t->data[mus_pos[i]];
+    if(n == 255){
+      if(t->loop != 0xFFFF){ mus_pos[i] = t->loop; continue; }
+      tr[i] = 0; mus_gate[i] = 0; return;
+    }
+    d = t->data[(u16)(mus_pos[i] + 1)];
+    mus_pos[i] = (u16)(mus_pos[i] + 2);
+    if(n == 0){ mus_gate[i] = 0; mus_period[i] = 0; }
+    else if(i == CH_NOISE){ mus_gate[i] = 1; mus_period[i] = (u16)((n - 1) & 15); }
+    else {
+      p = (n < 85) ? note_period[n] : note_period[84];
+      if(i == CH_TRI){ half = (u16)((p + 1) >> 1); p = half ? (u16)(half - 1) : 0; }
+      else if(p > 0x7FF) p = 0x7FF;
+      mus_gate[i] = 1; mus_period[i] = p;
+    }
+    if(d < 1) d = 1;
+    mus_timer[i] = (u8)(d - 1);
+    return;
+  }
+}
+static void sfx_step(void){
+  u8 d;
+  if(!sfx_on) return;
+  if(sfx_left){ sfx_left--; return; }
+  if(sfx_data[sfx_pos] == 0){ sfx_on = 0; return; }
+  sfx_period = sfx_data[sfx_pos];
+  d = (u8)sfx_data[sfx_pos + 1];
+  sfx_pos = (u8)(sfx_pos + 2);
+  if(d < 1) d = 1;
+  sfx_left = (u8)(d - 1);
+}
+static void audio_tick(void){
+  SndCh o[4]; u8 i, v;
+  for(i = 0; i < 4; i++){
+    mus_step(i);
+    v = (tr[i] && mus_gate[i]) ? tr[i]->vol : 0;
+    o[i].period = mus_period[i];
+    o[i].vol = (u8)(((u16)v * mus_master) / 15);
+    o[i].duty = tr[i] ? tr[i]->duty : 2;
+  }
+  sfx_step();
+  if(sfx_on){ o[CH_PULSE2].period = sfx_period; o[CH_PULSE2].vol = 14; o[CH_PULSE2].duty = 2; }
+  snd_hw(o);
 }
 
 /* ---- physics helpers ---- */
@@ -104,7 +188,7 @@ u8 tm_flags_at(s16 px, s16 py){
 u16 rnd(void){ seed ^= seed << 7; seed ^= seed >> 9; seed ^= seed << 8; return seed; }
 
 /* ---- main loop ---- */
-void engine_init(void){ r_init(); oam = r_oam(); next = game_boot(); }
+void engine_init(void){ mus_master = 12; r_init(); oam = r_oam(); next = game_boot(); }
 void engine_frame(u8 raw){
   u8 i;
   pad_pressed = (u8)(raw & ~pad_held); pad_released = (u8)(pad_held & ~raw); pad_held = raw;
@@ -121,6 +205,6 @@ void engine_frame(u8 raw){
   nspr = 0;
   cur->draw();
   for(i = nspr; i < MAX_SPRITES; i++) oam[i << 2] = 0xF0;   /* hide unused */
-  sfx_tick();
+  audio_tick();
   ++frame_count; seed += raw;
 }

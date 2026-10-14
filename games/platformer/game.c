@@ -2,6 +2,7 @@
    2-screen scrolling level, 6 coins, one enemy. Uses only engine.h. */
 #include "../../engine/engine.h"
 #include "assets.h"
+#include "music.h"
 
 #define T_HEAD 0xA0
 #define T_LEG1 0xA1
@@ -37,6 +38,7 @@ static void title_init(void){
   center_text(10, "TINY PLATFORMER");
   center_text(13, "COLLECT ALL COINS");
   center_text(16, "PRESS START");
+  music_play(MUS_TITLE);
 }
 static void title_update(void){ if(pad_pressed & BTN_START){ sfx(SFX_BLIP); scene_go(&play_scene); } }
 static void title_draw(void){ spr(120, 120, T_COIN, 1); }
@@ -52,6 +54,7 @@ static void play_init(void){
   for(i = 0; i < NCOINS; i++) coin_taken[i] = 0;
   coins_got = 0; score = 0; lives = 3; ex = 280; edir = 1; enemy_alive = 1; cam = 0;
   respawn();
+  music_play(MUS_PLAY);
 }
 static void lose_life(void){
   sfx(SFX_LOSE);
@@ -116,6 +119,7 @@ const Scene play_scene = { play_init, play_update, play_draw };
 
 /* ---------- end ---------- */
 static void end_init(void){
+  music_stop();
   bg_fill(0, 0, 32, 30, ' ');
   center_text(11, won ? "YOU WIN!" : "GAME OVER");
   bg_text(11, 14, "SCORE:"); bg_number(17, 14, score, 5);

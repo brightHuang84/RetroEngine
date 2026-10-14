@@ -11,15 +11,17 @@ flowchart TD
     BG[breakout/game.c]:::g
     PF[platformer/game.c]:::g
   end
-  games --> E[engine/engine.c<br>背景/属性/文字, 精灵/metasprite, 输入边沿,<br>场景, 音效序列, 定点数/AABB/地图碰撞]
+  games --> E[engine/engine.c<br>背景/属性/文字, 精灵/metasprite, 输入边沿,<br>场景, 四通道乐曲+音效, 定点数/AABB/地图碰撞]
   E -->|engine/backend.h| RS[render/render_soft.c<br>模拟 NES PPU：2 张 nametable, 属性, 64 精灵, 翻转, 滚动]
-  E -->|engine/backend.h| RN[render/render_nes.c<br>VRAM 更新队列 → NMI/vblank, OAM DMA, APU 方波]
-  RS --> SDL[platform/sdl<br>窗口 3x, 键盘, SDL 音频方波]
-  RS --> UEFI[platform/uefi<br>GOP 缩放居中, SimpleTextInput, Stall, 无声]
+  E -->|engine/backend.h| RN[render/render_nes.c<br>VRAM 更新队列 → NMI/vblank, OAM DMA, APU 四通道]
+  RS --> SDL[platform/sdl<br>窗口 3x, 键盘, 方波/三角波/噪声混合]
+  RS --> UEFI[platform/uefi<br>GOP 缩放居中, SimpleTextInput, Stall, PC 喇叭]
   RN --> NES[platform/nes<br>crt0.s, nes.cfg, 手柄]
   A[games/&lt;name&gt;/tiles.png + *.txt/*.csv 地图] --> T[tools/build_assets.py<br>png2chr.py + map2c.py]
   T --> CHR[game.chr → NES]
   T --> CA[tiles.c / maps.c / assets.h → 所有平台]
+  S[games/&lt;name&gt;/songs.txt] --> TM[tools/txt2mus.py]
+  TM --> MU[music.c / music.h → 所有平台]
   classDef g fill:#ffd
 ```
 
@@ -28,8 +30,8 @@ flowchart TD
 engine/   engine.h（公开 API） backend.h（后端接口） engine.c
 render/   render_soft.c/.h（PC 和 UEFI 共用） render_nes.c
 platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,nes.cfg,nes.h}
-games/    breakout/{game.c,tiles.png,play.txt}  platformer/{game.c,tiles.png,level.txt}
-tools/    build_assets.py png2chr.py map2c.py make_sheets.py mkimg.sh fceux_test.lua qemu_test.sh
+games/    breakout/{game.c,tiles.png,play.txt,songs.txt}  platformer/{game.c,tiles.png,level.txt,songs.txt}
+tools/    build_assets.py png2chr.py map2c.py txt2mus.py make_sheets.py mkimg.sh fceux_test.lua qemu_test.sh
 lib/      none.lib（cc65 运行库副本，用于离线编译）
 build/<game>/{pc,uefi,nes,gen}/   编译输出
 shots/    测试截图
@@ -41,7 +43,8 @@ shots/    测试截图
 | 屏幕 | 256x240；背景 64x30 tile（两屏宽），支持水平滚动 0..511 |
 | 颜色 | 4 组背景调色板 + 4 组精灵调色板，每组 3 色 + 公共背景色；背景调色板按 16x16 区块设置 |
 | 精灵 | 8x8，每帧最多 64 个；NES 上**同一扫描线最多 8 个**，超出的会消失 |
-| RAM | 2KB：$0200 是 OAM，$0300 是 VRAM 队列，$0700 是 C 栈；游戏和引擎变量放在 $0400-$06FF（breakout 用了 283 字节，platformer 用了 214 字节） |
+| RAM | 2KB：$0200 是 OAM，$0300 是 VRAM 队列，$0700 是 C 栈；游戏和引擎变量放在 $0400-$06FF（breakout 的 BSS 是 333 字节，platformer 是 264 字节，含大约 40 字节乐曲状态） |
+| 音频 | 4 通道：两路方波、三角波、噪声；没有 DPCM。音效占用 pulse2 |
 | VRAM 写入 | 每帧大约 96 字节，超出时引擎会等一帧（掉一帧）；在场景 `init` 里写入不受限制（此时渲染已关闭） |
 | ROM | NROM：32KB PRG + 8KB CHR（256 个 tile，背景和精灵共用） |
 | 数值 | 整数；`fx` 是 12.4 定点数（范围 ±2047 像素）；cc65 的 `int` 是 16 位 |
@@ -66,9 +69,80 @@ shots/    测试截图
 
 **场景**：`Scene {init, update, draw}`，`scene_go(&scene)` 在下一帧开始时切换。游戏要提供 `game_boot()`（返回第一个场景）和 `game_autopilot()`（PC 测试模式下的自动输入）。
 
-**音效**：`sfx(SFX_BLIP|HIT|COIN|JUMP|LOSE|WIN)`，用一个方波通道。NES 用 APU pulse1，PC 用 SDL 音频，UEFI 没有声音。
+**音频**：四个通道同时出声（方波、方波、三角波、噪声）。`music_play` / `music_stop` / `music_pause` / `music_volume` 播循环乐曲，`sfx(SFX_BLIP|HIT|COIN|JUMP|LOSE|WIN)` 暂时占用第二路方波，结束后那一路乐曲继续。详见下面的「音频」。
 
 **物理**：`aabb(ax,ay,aw,ah,bx,by,bw,bh)`，`tm_bind(map,w,h,flags)`，`tm_flags_at(px,py)`（返回 `TF_SOLID`，地图左右和上方之外都算实心），`rnd()`。全局变量 `frame_count`。
+
+## 音频
+
+乐曲和音效同时播放。模型就是 NES APU 的前四个通道，没有 DPCM。游戏代码和 `engine.c` 里没有平台 `#ifdef`，只用整数，每帧（60Hz）走一步。
+
+| 通道 | 波形 | 谁在用 |
+|---|---|---|
+| pulse1 | 方波，占空比 12.5/25/50/75% | 乐曲主旋律 |
+| pulse2 | 方波 | 乐曲和声；`sfx()` 临时占用，结束后回到乐曲 |
+| triangle | 三角波 | 低音。NES 上没有音量，只有开和关 |
+| noise | 15 位 LFSR | 打击乐。`mode 1` 是短模式 |
+
+音高用 NTSC 的 APU 周期：方波频率是 `1789773/16/(period+1)`，三角波是 `1789773/32/(period+1)`。SDL 用同一组周期去合成，所以和 NES 是同一个调。
+
+**API**（`engine/engine.h`）
+
+- `music_play(MUS_TITLE)`：从头播放。`MUS_*` 由 `songs.txt` 里的 `song` 名字生成。
+- `music_stop()`：停掉乐曲。正在响的音效会继续。
+- `music_pause(1)` 暂停并保持当前音符，`music_pause(0)` 继续。
+- `music_volume(0..15)`：只缩小乐曲。音效不跟着变。默认 12。
+- `sfx(SFX_BLIP|HIT|COIN|JUMP|LOSE|WIN)`：和原来的编号一样，占 pulse2，音量比乐曲和声高。
+
+两个示例的标题画面播 `MUS_TITLE`，局内播 `MUS_PLAY`，结束画面停乐，胜利/失败音效盖在最后一拍上。
+
+**songs.txt**
+
+```
+song title
+tempo 128
+
+pulse1 duty 2 vol 10
+  E5 8 G5 8 A5 8 G5 8
+  loop
+  C5 4 E5 4
+
+pulse2 duty 1 vol 5
+  C4 4 E4 4
+
+triangle vol 15
+  C3 2 G2 2
+
+noise vol 6 mode 0
+  N1 8 N12 8
+```
+
+- `tempo` 是四分音符的 BPM。八分音符正好是它的一半（四分音符帧数会取整，写十六分音符时最好让这个帧数能被 4 整除，例如 tempo 120 → 30 帧，tempo 128 → 28 帧，tempo 150 → 24 帧）。
+- 音符：`C4` `C#4` `Bb3`，音域 C1–B7。`R` 或 `-` 是休止。
+- 时值：`1` 全音符、`2` 二分、`4` 四分、`8` 八分、`16` 十六分、`32` 三十二分。`8.` 是附点八分。`t12` 表示正好 12 帧。
+- `loop` 单独一行：它上面的是前奏，只播一次；下面的反复。不写 `loop` 就整段循环。通道行上写 `once` 则播完就停。
+- 噪声只用 `N0`（最高、最尖）到 `N15`（最低）。`mode 1` 切换短 LFSR。
+- 四个通道各自循环。总帧数不一样时，`txt2mus.py` 会警告，听起来会慢慢错开。
+- `duty` 只对方波有意义：0 = 12.5%，1 = 25%，2 = 50%，3 = 75%。`vol` 是 0..15。
+
+`make` 会调用 `python3 tools/txt2mus.py games/<游戏>/songs.txt build/<游戏>/gen`，生成 `music.c` 和 `music.h`（里面有 `MUS_TITLE` 这类宏，以及 `music_lookup()`）。
+
+**写一首新曲子**
+
+1. 在 `games/<游戏>/songs.txt` 里加一段 `song mytune`。
+2. 先写 pulse1 的旋律，再让 pulse2、triangle、noise 的总时值和它相同。
+3. `make GAME=<游戏> pc`，用耳机听。想只录声音：`RETRO_WAV=tune.wav RETRO_TEST=/tmp/shot ./build/<游戏>/pc/<游戏>`。
+4. 在场景 `init` 里调用 `music_play(MUS_MYTUNE)`。
+
+**以后如果要从 FamiTracker / FamiStudio 导入**
+
+这两个工具的四个旋律通道和这里一一对应：pulse1、pulse2、triangle、noise。FamiStudio 可以导出文本，FamiTracker 也可以导出文本或 MIDI。眼下没有导入器，把音高、时值和循环点抄进 `songs.txt` 即可。DPCM 采样不在范围内。
+
+**三个后端**
+
+- NES：每帧写 `$4000`–`$400F`，并打开 `$4015` 的低四位。只有音高的高 3 位变了，或者一个通道从静音变成发声时，才写 `$4003` / `$400B` / `$400F`，避免每帧重置相位发出杂音。
+- SDL：回调里用同一套周期合成方波（占空比序列）、32 步三角波和噪声 LFSR，混合成 44100Hz 单声道。`RETRO_WAV=文件.wav` 时不打开声卡，改为每个引擎帧写 735 个采样。
+- UEFI：PC 喇叭（端口 `0x61`，PIT 通道 2 `0x42`）。同时只能响一个音，优先级是 pulse2、pulse1、三角波，这样音效能盖过旋律。噪声不走喇叭。QEMU 需要把 PC speaker 接到音频设备，例如 `-audiodev wav,id=snd,path=uefi.wav -machine pcspk-audiodev=snd`。没有这块设备时喇叭是静音的。
 
 ## 一步一步做一个新游戏
 1. `mkdir games/mygame`
@@ -85,14 +159,15 @@ shots/    测试截图
      ```
    - 或者用 Tiled 导出 CSV `level.csv`，再写一个配套的 `level.legend`（每行格式：`tile [pal=N] [solid]`）
    - 生成的代码包括 `map_level[]`、`map_level_attr[]`、`map_level_flags[]`，以及 `MAP_LEVEL_W/H`
-4. 写 `game.c`：只 `#include "../../engine/engine.h"` 和 `"assets.h"`，实现场景、`game_boot()`、`game_autopilot()`。
-5. `make GAME=mygame pc`（以及 uefi、img、nes、all）
+4. 写 `songs.txt`（至少一首循环；`make` 会用它生成 `music.h`）。格式见上面的「音频」。
+5. 写 `game.c`：只 `#include "../../engine/engine.h"`、`"assets.h"` 和 `"music.h"`，实现场景、`game_boot()`、`game_autopilot()`。要背景音乐就在场景 `init` 里调用 `music_play(MUS_...)`。
+6. `make GAME=mygame pc`（以及 uefi、img、nes、all）
 
 **保持可移植的规则**：不使用 `#ifdef 平台`、浮点数、malloc、libc；变量声明放在代码块开头（C89）；大的常量数据加 `const`（会放进 ROM）；每帧的背景修改要少（大改动放在场景 init 里做）；HUD 如果要跟着滚动，就用精灵来画。
 
 ## 添加一个新平台
-1. 帧缓冲类平台：复用 `render_soft.c`。平台层负责：`engine_init()` → 每 1/60 秒调用 `engine_frame(按键位掩码)` → `soft_compose(fb)` → 显示；音频读取 `soft_snd_period/vol`。
-2. tile 硬件类平台（GB、SMS、PCE…）：照着 `render_nes.c` 实现 `backend.h` 里的函数（`r_init r_palette r_tiles r_attr r_scroll r_bulk_begin/end r_oam snd_hw`）。
+1. 帧缓冲类平台：复用 `render_soft.c`。平台层负责：`engine_init()` → 每 1/60 秒调用 `engine_frame(按键位掩码)` → `soft_compose(fb)` → 显示。音频读 `soft_period[4]`、`soft_vol[4]`、`soft_duty[4]`（已经是 NES 定时器数值）。
+2. tile 硬件类平台（GB、SMS、PCE…）：照着 `render_nes.c` 实现 `backend.h` 里的函数（`r_init r_palette r_tiles r_attr r_scroll r_bulk_begin/end r_oam snd_hw`）。`snd_hw` 收到 4 个 `SndCh`。
 3. 在 Makefile 里加一个 target，把 `engine/engine.c`、`games/$(GAME)/game.c` 和生成的资源编进去。
 
 ## 资源流程
@@ -101,7 +176,7 @@ shots/    测试截图
 - `tiles.c`：`chr_tiles[4096]`，内容和 CHR 一样，给软件渲染器用
 - `maps.c` 和 `assets.h`：地图、属性表、碰撞标志
 
-所以每个游戏只有一份图形源（`tiles.png`）和一份地图源，三个平台的画面完全对应。`make` 会自动运行这一步。
+所以每个游戏只有一份图形源（`tiles.png`）和一份地图源，三个平台的画面完全对应。`make` 会自动运行这一步，也会用 `tools/txt2mus.py` 把 `songs.txt` 编成 `music.c`。
 
 ## 在 Ubuntu 26.04 上安装和编译
 ```sh
@@ -118,6 +193,7 @@ make clean           # 删除 build/（想完整重新编译时先执行它）
 ## 运行
 - PC：`./build/platformer/pc/platformer`
   - 测试模式：`RETRO_TEST=shots/x RETRO_SHOT_A=60 RETRO_SHOT_B=600 ./build/breakout/pc/breakout`
+  - 把混合结果写成 WAV（不打开声卡）：`RETRO_WAV=breakout.wav RETRO_TEST=/tmp/br RETRO_SHOT_B=360 ./build/breakout/pc/breakout`
 - UEFI：
   ```sh
   qemu-system-x86_64 -m 256 -net none \
@@ -142,7 +218,9 @@ make clean           # 删除 build/（想完整重新编译时先执行它）
 Breakout：左右移动挡板，A 或 Start 发球。Platformer：左右跑动，A 跳跃（按得越久跳得越高），踩敌人可以把它消灭，收集全部 6 枚金币就胜利，掉进坑里会损失一条命。
 
 ## 已知限制
-- UEFI 没有“按键松开”事件：引擎会在按键事件之后把它当作按住几帧（方向键 8 帧），持续按住要靠键盘自动重复。UEFI 版没有声音。
+- UEFI 没有“按键松开”事件：引擎会在按键事件之后把它当作按住几帧（方向键 8 帧），持续按住要靠键盘自动重复。UEFI 只用 PC 喇叭，同一时刻一个音（pulse2 优先，然后 pulse1，然后三角波），噪声听不到。QEMU 要加 `-machine pcspk-audiodev=...` 才能出声。
+- 没有 DPCM。音效和乐曲和声共用 pulse2：音效响起时这一路的和声暂时让位，另外三路继续走，音效结束的下一帧和声回到当前音符（乐曲时钟没有停）。
+- 三角波在 NES 上没有音量；SDL 会按 `vol` 缩放，UEFI 喇叭只把它当成开或关。
 - NES 每条扫描线最多 8 个精灵，背景色块是 16x16；fceux 默认会裁掉画面最上和最下各 8 行（屏幕顶部的 HUD 会被切掉一部分）。
 - 软件渲染器的 RGB 调色板和 fceux 的不完全一样，颜色会略有差异。
 - 修改背景 tile 不会自动更新碰撞地图（`tm_bind` 绑定的是 ROM 里的地图）。

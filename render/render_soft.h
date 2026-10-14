@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include "../engine/backend.h"
 void soft_compose(uint32_t *fb);              /* 256x240, 0x00RRGGBB */
-extern volatile u16 soft_snd_period;          /* read by the SDL audio callback */
-extern volatile u8  soft_snd_vol;
+/* Latest APU register image, written every frame. SDL mixes it; UEFI reads one channel for the PC speaker. */
+extern volatile u16 soft_period[4];
+extern volatile u8  soft_vol[4];
+extern volatile u8  soft_duty[4];
 #endif

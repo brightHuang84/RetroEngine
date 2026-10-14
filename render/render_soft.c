@@ -7,7 +7,7 @@ static u8 at[2][64];
 static u8 pal[32];
 static u8 oam[256];
 static u16 scroll;
-volatile u16 soft_snd_period; volatile u8 soft_snd_vol;
+volatile u16 soft_period[4]; volatile u8 soft_vol[4]; volatile u8 soft_duty[4];
 static const uint32_t nes_rgb[64] = {
  0x545454,0x001E74,0x081090,0x300088,0x440064,0x5C0030,0x540400,0x3C1800,0x202A00,0x083A00,0x004000,0x003C00,0x00323C,0,0,0,
  0x989698,0x084CC4,0x3032EC,0x5C1EE4,0x8814B0,0xA01464,0x982220,0x783C00,0x545A00,0x287200,0x087C00,0x007628,0x006678,0,0,0,
@@ -21,7 +21,10 @@ void r_scroll(u16 x){ scroll = x & 511; }
 void r_bulk_begin(void){}
 void r_bulk_end(void){}
 u8 *r_oam(void){ return oam; }
-void snd_hw(u16 period, u8 vol){ soft_snd_period = period; soft_snd_vol = vol; }
+void snd_hw(const SndCh *ch){
+  u8 i;
+  for(i = 0; i < 4; i++){ soft_period[i] = ch[i].period; soft_vol[i] = ch[i].vol; soft_duty[i] = ch[i].duty; }
+}
 
 static int px_of(u8 tile, int r, int c){
   const u8 *t = &chr_tiles[tile * 16];
