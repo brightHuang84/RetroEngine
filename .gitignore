@@ -1,0 +1,33 @@
+# Build tree: binaries, objects, cc65 assembly, and generated assets
+build/
+
+# Compiler / linker intermediates (also emitted under build/)
+*.o
+*.obj
+*.map
+*.so
+
+# cc65-generated assembly. The only hand-written source is platform/nes/crt0.s.
+*.s
+!platform/nes/crt0.s
+
+# Asset-pipeline outputs (normally build/<game>/gen/)
+*.chr
+**/gen/assets.h
+**/gen/tiles.c
+**/gen/maps.c
+
+# Packaged firmware and disk images
+*.nes
+*.efi
+*.EFI
+*.img
+
+# Python tool caches
+__pycache__/
+*.pyc
+
+# Editor / OS noise
+.DS_Store
+*~
+*.swp
