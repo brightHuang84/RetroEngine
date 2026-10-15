@@ -33,7 +33,7 @@ engine/   engine.h（公开 API） backend.h（后端接口） engine.c
 render/   render_soft.c/.h（PC 和 UEFI 共用） render_nes.c  render_gba.c
 platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,nes.cfg,nes.h}  gba/{main_gba.c,crt0.s,gba.ld,gba.h}
 games/    breakout/{game.c,tiles.png,play.txt,songs.txt}  platformer/{game.c,tiles.png,level.txt,songs.txt}
-tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py txt2mus.py make_sheets.py mkimg.sh fceux_test.lua qemu_test.sh
+tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py txt2mus.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua qemu_test.sh
 lib/      none.lib（cc65 运行库副本，用于离线编译）
 build/<game>/{pc,uefi,nes,gba,gen}/   编译输出
 shots/    测试截图
@@ -191,12 +191,14 @@ sudo apt install build-essential python3 python3-pil libsdl2-dev gnu-efi mtools 
 #   可执行文件是 /usr/games/mgba（不一定在默认 PATH 里）
 make GAME=breakout   pc|uefi|img|nes|gba|all
 make GAME=platformer pc|uefi|img|nes|gba|all
-make games-all       # 两个游戏 × pc/uefi/img/nes（不含 gba，避免没有 ARM 工具链的机器失败）
+make games-all       # 两个游戏 × pc/uefi/img/nes（不含 gba）
 make clean           # 删除 build/（想完整重新编译时先执行它）
 ```
 输出文件：`build/<game>/pc/<game>`、`build/<game>/uefi/BOOTX64.EFI` 和 `<game>.img`、`build/<game>/nes/<game>.nes`、`build/<game>/gba/<game>.gba`
 
-GBA 不用 devkitARM，也不用 libtonc：Ubuntu 的仓库里没有这两个。工具链是 `gcc-arm-none-eabi`（`-marm -mcpu=arm7tdmi -ffreestanding -nostdlib`），启动代码和链接脚本在 `platform/gba/`。`all` 不包含 `gba`，没有这套编译器时另外三个平台照常能编。
+`make all` 会编 pc、uefi、img、nes。某个可选工具链没装时只打印一行 `skip <目标>: ...`，其余目标继续。直接执行 `make uefi`（或 `pc` / `img` / `nes`）时，工具链缺失仍然失败。`gba` 不在 `all` 里。
+
+GBA 不用 devkitARM，也不用 libtonc：Ubuntu 的仓库里没有这两个。工具链是 `gcc-arm-none-eabi`（`-marm -mcpu=arm7tdmi -ffreestanding -nostdlib`），启动代码和链接脚本在 `platform/gba/`。没有这套编译器时，`make all` 里的其他目标照常能编。
 
 卡头由 `tools/gbafix.py` 写入 12 字节标题和补码校验（`0xB2 = 0x96`）。它不写入任天堂 Logo。如果 PATH 里有 devkitARM 的 `gbafix`，Makefile 会改用那个，Logo 会写进去，真机 BIOS 才能过启动画面。mGBA 自带的 BIOS 不检查 Logo，可以直接运行这里编出来的 ROM。
 
@@ -238,6 +240,26 @@ Breakout：左右移动挡板，A 或 Start 发球。Platformer：左右跑动�
 - 上下用 HBlank 中断切成两段。最上面 16 行永远显示地图的 y = 0..15，Breakout 的 `SCORE` / `LIVES` 不会跟着滚走。剩下 144 行显示 `view_y .. view_y+143`。
 - `view_y` 跟着逻辑 y ≥ 24 的精灵走，并夹在 16..96。差得不远时取中点；上下拉开超过 130 像素而且上面还有东西（球打进砖里）时跟着上面，挡板会暂时出画面，球回到下方再把挡板找回来。没有这类精灵时（标题）取 140，三行标题都看得到，装饰用的砖会裁掉一截。
 - Platformer 的 HUD 是精灵，画在 y = 8 和 y = 20，不参与取景，钉在屏幕上方。
+
+## 排错
+
+### `objcopy: file format not recognized`
+
+Ubuntu 26.04 的 binutils 2.46（从 2.45 起）里，`objcopy --target efi-app-x86_64` 会把这个名字同时当作输入格式和输出格式。链接出来的 `app.so` 是 ELF，按 EFI 应用去读就会报 `file format not recognized`。`tools/uefi_link.sh` 使用 `--output-target=efi-app-x86_64`。binutils 2.42 和 2.46 都能据此把 ELF 转成 PE32+。
+
+gnu-efi 4.0 的链接脚本把 `.rodata` 做成独立的段（3.0.x 多数版本把它并进 `.data`）。这一段没被拷进镜像时，字符串、乐曲和贴图常量都不会出现在 `BOOTX64.EFI` 里。转换时按 `readelf -S` 里实际存在的段来选，包括 `.rodata`，以及存在时的 `.sbat` / `.sbatlevel`。`.rela.reloc` 不打进镜像，避免重定位做两次。
+
+`tools/uefi_probe.sh` 查找 `elf_x86_64_efi.lds`、`crt0-efi-x86_64.o`、`libefi.a` 和 `efi.h`：先问 `pkg-config gnu-efi`，再查 `/usr/lib`、`/usr/lib/x86_64-linux-gnu`、`/usr/lib64`、`/usr/local/lib`（以及这些目录下的 `gnuefi/`）。gnu-efi 3.0.15 没有 pkg-config 文件，会落到后面的目录搜索。路径不在这些位置时：
+
+```sh
+make UEFI_LIBDIRS=/path/to/lib UEFI_INCDIR=/path/to/include/efi GAME=breakout uefi
+```
+
+`UEFI_LIBDIRS` 用冒号分隔多个目录。一旦设置，就只在这些目录里找，不再回退到系统路径。`app.so` 缺失、为空或不是 ELF，或者 `BOOTX64.EFI` 缺失、为空或不以 `MZ` 开头，会马上停并打印原因。换一套 objcopy 时可以设 `OBJCOPY=/path/to/objcopy`。
+
+### `make all` 缺工具链
+
+缺的是可选工具时打印 `skip pc`、`skip uefi`、`skip img` 或 `skip nes`，后面的目标继续编。例如没装 cc65 时 NES 被跳过，PC 和 UEFI 照常完成。直接 `make uefi`、`make pc`、`make img`、`make nes` 在工具缺失时失败，并说明该装什么。编译或链接本身失败时，`make all` 会停。
 
 ## 已知限制
 - UEFI 没有“按键松开”事件：引擎会在按键事件之后把它当作按住几帧（方向键 8 帧），持续按住要靠键盘自动重复。UEFI 只用 PC 喇叭，同一时刻一个音（pulse2 优先，然后 pulse1，然后三角波），噪声听不到。QEMU 要加 `-machine pcspk-audiodev=...` 才能出声。
