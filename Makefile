@@ -53,7 +53,7 @@ all-nes:
 	  $(MAKE) --no-print-directory nes; \
 	else echo "skip nes: cc65, ca65, or ld65 not found (install cc65)"; fi
 
-$(GEN)/assets.h $(GEN)/tiles.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/game.chr: $(ASSET_SRC)
+$(GEN)/assets.h $(GEN)/tiles.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/palette.c $(GEN)/game.chr: $(ASSET_SRC)
 	python3 tools/build_assets.py $(G) $(GEN)
 assets: $(GEN)/assets.h
 
@@ -67,7 +67,7 @@ $(GEN)/music.c $(GEN)/music.h: $(MUS_IN) tools/txt2mus.py tools/fms2mus.py
 	python3 tools/txt2mus.py $(GEN)/songs.gen.txt $(GEN)
 
 # ---------------- PC / SDL2 ----------------
-PC_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_soft.c platform/sdl/main_sdl.c $(GEN)/tiles.c $(GEN)/maps.c $(MUS_SRC)
+PC_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_soft.c platform/sdl/main_sdl.c $(GEN)/tiles.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
 pc: $(B)/pc/$(GAME)
 $(B)/pc/$(GAME): $(PC_SRC) $(HDRS) render/render_soft.h
 	@command -v sdl2-config >/dev/null 2>&1 || { echo "pc: sdl2-config not found (install libsdl2-dev)"; exit 1; }
@@ -82,7 +82,7 @@ $(B)/pc/$(GAME): $(PC_SRC) $(HDRS) render/render_soft.h
 EFI_CFLAGS := -O2 -std=c99 -Wall -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns \
   -I. -I$(GEN) -fpic -fshort-wchar -fno-stack-protector -fno-strict-aliasing \
   -mno-red-zone -maccumulate-outgoing-args -mno-sse -mno-mmx -DEFI_FUNCTION_WRAPPER -DGNU_EFI_USE_MS_ABI
-EFI_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_soft.c platform/uefi/main_uefi.c $(GEN)/tiles.c $(GEN)/maps.c $(MUS_SRC)
+EFI_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_soft.c platform/uefi/main_uefi.c $(GEN)/tiles.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
 EFI_OBJ := $(addprefix $(B)/uefi/obj/,$(notdir $(EFI_SRC:.c=.o)))
 uefi: $(B)/uefi/BOOTX64.EFI
 $(B)/uefi/BOOTX64.EFI: $(EFI_SRC) $(HDRS) render/render_soft.h tools/uefi_probe.sh tools/uefi_link.sh
@@ -100,7 +100,7 @@ $(B)/uefi/$(GAME).img: $(B)/uefi/BOOTX64.EFI tools/mkimg.sh
 
 # ---------------- NES (cc65, NROM) ----------------
 NO := $(B)/nes/obj
-NES_C := $(ENGINE_SRC) $(GAME_SRC) render/render_nes.c platform/nes/main.c $(GEN)/maps.c $(MUS_SRC)
+NES_C := $(ENGINE_SRC) $(GAME_SRC) render/render_nes.c platform/nes/main.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
 nes: $(B)/nes/$(GAME).nes
 $(B)/nes/$(GAME).nes: $(NES_C) $(HDRS) platform/nes/nes.h platform/nes/crt0.s platform/nes/nes.cfg $(GEN)/game.chr
 	@command -v cc65 >/dev/null 2>&1 && command -v ca65 >/dev/null 2>&1 && command -v ld65 >/dev/null 2>&1 || { echo "nes: cc65, ca65, and ld65 not found (install cc65)"; exit 1; }
@@ -117,7 +117,7 @@ $(B)/nes/$(GAME).nes: $(NES_C) $(HDRS) platform/nes/nes.h platform/nes/crt0.s pl
 # tools/gbafix.py writes the title and complement (no Nintendo logo).
 GBA_CFLAGS := -marm -mcpu=arm7tdmi -ffreestanding -fno-builtin -fno-unwind-tables \
   -fno-asynchronous-unwind-tables -O2 -std=c99 -Wall -Wextra -fno-strict-aliasing -I. -I$(GEN)
-GBA_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_gba.c platform/gba/main_gba.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(MUS_SRC)
+GBA_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_gba.c platform/gba/main_gba.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
 GBA_DEPS := $(GBA_SRC) $(HDRS) platform/gba/crt0.s platform/gba/gba.ld platform/gba/gba.h tools/gbafix.py
 
 define build_gba
@@ -136,6 +136,13 @@ gba-auto: $(B)/gba/$(GAME)-auto.gba
 $(B)/gba/$(GAME)-auto.gba: $(GBA_DEPS)
 	$(call build_gba,$@,-DGBA_AUTOPILOT)
 
+# Build the PC binary and launch it. The editor also has its own Run button.
+run: pc
+	./$(B)/pc/$(GAME)
+
+editor-install:
+	editor/install.sh
+
 clean:
 	rm -rf build
-.PHONY: all all-pc all-uefi all-img all-nes games-all assets pc uefi img nes gba gba-auto clean
+.PHONY: all all-pc all-uefi all-img all-nes games-all assets pc uefi img nes gba gba-auto run editor-install clean

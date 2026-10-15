@@ -13,9 +13,6 @@
 #define T_BRICK_R 0x81
 #define T_BALL 0x90
 
-static const u8 palette[32] = {
-  0x0F,0x16,0x26,0x06, 0x0F,0x27,0x37,0x17, 0x0F,0x2A,0x3A,0x1A, 0x0F,0x10,0x00,0x30,
-  0x0F,0x30,0x30,0x10, 0x0F,0x21,0x31,0x11, 0x0F,0x30,0x30,0x30, 0x0F,0x30,0x30,0x30 };
 static const s8 paddle_meta[] = { 0,0,0x91,1, 8,0,0x92,1, 16,0,0x92,1, 24,0,0x93,1, -128 };
 
 static u8 bricks[BR_ROWS][BR_COLS];
@@ -34,7 +31,7 @@ static void hud(void){ bg_number(8, 1, score, 5); bg_number(29, 1, lives, 1); }
 /* ---------- title ---------- */
 static void title_init(void){
   u8 r, c;
-  gfx_palette(palette);
+  gfx_palette(game_palette);
   bg_fill(0, 0, 32, 30, ' ');
   for(r = 0; r < 4; r++) for(c = 0; c < 16; c++){ bg_tile((u8)(c * 2), (u8)(6 + r), T_BRICK_L); bg_tile((u8)(c * 2 + 1), (u8)(6 + r), T_BRICK_R); bg_attr((u8)(c * 2), (u8)(6 + r), (u8)(r >> 1)); }
   bg_text(12, 13, "BREAKOUT");
@@ -113,7 +110,7 @@ static void end_update(void){ if(pad_pressed & BTN_START) scene_go(&title_scene)
 static void end_draw(void){}
 const Scene end_scene = { end_init, end_update, end_draw };
 
-const Scene *game_boot(void){ gfx_palette(palette); return &title_scene; }
+const Scene *game_boot(void){ gfx_palette(game_palette); return &title_scene; }
 
 /* test-mode input (PC RETRO_TEST): start game, then follow the ball */
 u8 game_autopilot(void){

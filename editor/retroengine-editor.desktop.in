@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=RetroEngine 编辑器
+GenericName=游戏编辑器
+Comment=编辑图块、调色板、地图和音乐，并编译运行
+Exec=python3 @ROOT@/editor/retro_editor.py
+Icon=@ROOT@/editor/icon.png
+Terminal=false
+Categories=Development;AudioVideo;
+StartupWMClass=retroengine-editor

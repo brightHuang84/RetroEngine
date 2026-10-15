@@ -1,0 +1,11 @@
+# Breakout NES palette. Eight rows of four indices (00-3F):
+# BG0 BG1 BG2 BG3, then sprite 0..3.
+# Background color 0 uses only the first entry of BG0 (the shared backdrop).
+0F 16 26 06
+0F 27 37 17
+0F 2A 3A 1A
+0F 10 00 30
+0F 30 30 10
+0F 21 31 11
+0F 30 30 30
+0F 30 30 30

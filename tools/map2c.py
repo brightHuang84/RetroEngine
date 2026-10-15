@@ -13,7 +13,7 @@ def parse_opts(tokens):
         if t == 'solid': solid = True
     return pal, solid
 def load(path):
-    tiles = []; pal = {}; solid = set()
+    tiles = []; pal = {}; solid = set(); palmap = None
     if path.endswith('.csv'):
         for line in open(path):
             line = line.strip().rstrip(',')
@@ -25,20 +25,26 @@ def load(path):
                 if not p or p[0].startswith('#'): continue
                 t = int(p[0], 0); pal[t], s = parse_opts(p[1:])
                 if s: solid.add(t)
-        return tiles, pal, solid
+        return tiles, pal, solid, None
     legend = {}; mode = None
     for line in open(path):
         line = line.rstrip('\n')
-        if line.strip() in ('legend:', 'map:'): mode = line.strip(); continue
+        if line.strip() in ('legend:', 'map:', 'palmap:'): mode = line.strip(); continue
         if mode == 'legend:' and line.strip() and not line.startswith(';'):
             ch = line[0]; p = line[1:].split()
             t = int(p[0], 0); legend[ch] = t; pal[t], s = parse_opts(p[1:])
             if s: solid.add(t)
         elif mode == 'map:' and line:
             tiles.append([legend[c] for c in line])
-    return tiles, pal, solid
+        elif mode == 'palmap:' and line and not line.startswith(';'):
+            if palmap is None: palmap = []
+            palmap.append([int(c, 16) & 3 for c in line.strip()])
+    if palmap is not None:
+        if len(palmap) != len(tiles) or any(len(r) != len(tiles[0]) for r in palmap):
+            raise SystemExit('%s: palmap size does not match the map' % path)
+    return tiles, pal, solid, palmap
 def main(path, name):
-    tiles, pal, solid = load(path)
+    tiles, pal, solid, palmap = load(path)
     h = len(tiles); w = len(tiles[0])
     assert all(len(r) == w for r in tiles), "ragged map"
     assert w <= 64 and h <= 30
@@ -58,7 +64,9 @@ def main(path, name):
                     if y < h and x < w:   # first non-zero palette in the 2x2 tile quadrant
                         for yy in (y, y + 1):
                             for xx in (x, x + 1):
-                                if yy < h and xx < w and pal.get(tiles[yy][xx], 0): p = p or pal[tiles[yy][xx]]
+                                if yy < h and xx < w:
+                                    v = palmap[yy][xx] if palmap is not None else pal.get(tiles[yy][xx], 0)
+                                    if v: p = p or v
                     b |= (p & 3) << (q * 2)
                 at.append(b)
     out.append('const unsigned char map_%s_attr[%d] = {%s};' % (name, len(at), ','.join(str(v) for v in at)))

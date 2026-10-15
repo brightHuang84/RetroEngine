@@ -17,9 +17,6 @@
 #define MAX_FALL 80
 #define RUN_V   24         /* 1.5 px/frame */
 
-static const u8 palette[32] = {
-  0x21,0x1A,0x2A,0x0A,  0x21,0x07,0x17,0x2A,  0x21,0x00,0x10,0x30,  0x21,0x30,0x30,0x30,   /* sky backdrop */
-  0x21,0x16,0x27,0x37,  0x21,0x18,0x28,0x38,  0x21,0x0F,0x16,0x30,  0x21,0x30,0x30,0x30 };
 static const s16 coin_x[NCOINS] = { 56, 96, 160, 232, 376, 440 };
 static const s16 coin_y[NCOINS] = { 196, 156, 124, 156, 148, 116 };
 
@@ -130,7 +127,7 @@ static void end_update(void){ if(pad_pressed & BTN_START) scene_go(&title_scene)
 static void end_draw(void){}
 const Scene end_scene = { end_init, end_update, end_draw };
 
-const Scene *game_boot(void){ gfx_palette(palette); return &title_scene; }
+const Scene *game_boot(void){ gfx_palette(game_palette); return &title_scene; }
 
 /* PC test mode: press start, run right, jump regularly */
 u8 game_autopilot(void){

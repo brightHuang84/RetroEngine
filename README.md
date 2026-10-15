@@ -19,9 +19,9 @@ flowchart TD
   RS --> UEFI[platform/uefi<br>GOP 缩放居中, SimpleTextInput, Stall, PC 喇叭]
   RN --> NES[platform/nes<br>crt0.s, nes.cfg, 手柄]
   RG --> GBA[platform/gba<br>crt0.s, gba.ld, 手柄, vblank]
-  A[games/&lt;name&gt;/tiles.png + *.txt/*.csv 地图] --> T[tools/build_assets.py<br>png2chr.py + png2gba.py + map2c.py]
+  A[games/&lt;name&gt;/tiles.png + *.txt/*.csv 地图 + palette.txt] --> T[tools/build_assets.py<br>png2chr.py + png2gba.py + map2c.py]
   T --> CHR[game.chr → NES]
-  T --> CA[tiles.c / tiles_gba.c / maps.c / assets.h → 各平台]
+  T --> CA[tiles.c / tiles_gba.c / maps.c / palette.c / assets.h → 各平台]
   S[games/&lt;name&gt;/songs.txt<br>以及 music/*.fms.txt] --> FM[tools/fms2mus.py]
   FM --> TM[tools/txt2mus.py]
   TM --> MU[music.c / music.h → 所有平台]
@@ -33,7 +33,8 @@ flowchart TD
 engine/   engine.h（公开 API） backend.h（后端接口） engine.c
 render/   render_soft.c/.h（PC 和 UEFI 共用） render_nes.c  render_gba.c
 platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,nes.cfg,nes.h}  gba/{main_gba.c,crt0.s,gba.ld,gba.h}
-games/    breakout/{game.c,tiles.png,play.txt,songs.txt,music/*.fms.txt,fami/*.fms.txt}  platformer/ 同样
+games/    breakout/{game.c,tiles.png,palette.txt,play.txt,songs.txt,music/*.fms.txt,fami/*.fms.txt}  platformer/ 同样
+editor/   桌面编辑器（图块、调色板、地图、音乐、编译运行）。见 editor/README.md
 tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py txt2mus.py fms2mus.py songs2fms.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua qemu_test.sh
 lib/      none.lib（cc65 运行库副本，用于离线编译）
 build/<game>/{pc,uefi,nes,gba,gen}/   编译输出
@@ -56,7 +57,7 @@ shots/    测试截图
 **类型**：`u8 s8 u16 s16`，`fx`（12.4 定点数），`FX(n)` 把整数转成定点数，`FX_INT(v)` 把定点数转回整数。
 
 **背景**
-- `gfx_palette(const u8 pal[32])`：设置调色板（NES 颜色编号）
+- `gfx_palette(const u8 pal[32])`：设置调色板（NES 颜色编号）。每个游戏的 32 色写在 `palette.txt`，编译后变成 `game_palette`
 - `bg_tile(x,y,t)`、`bg_tiles(x,y,ptr,n)`、`bg_fill(x,y,w,h,t)`：写入 tile（会排队，x 范围 0..63）
 - `bg_attr(x,y,pal)`：设置 tile (x,y) 所在 16x16 区块的调色板
 - `bg_text(x,y,"TEXT")`、`bg_number(x,y,value,digits)`：显示文字和数字（tile 编号就是 ASCII 码）
@@ -214,10 +215,13 @@ PC 上只听某一首、并且游戏里的 `music_play` 都改播它：`RETRO_MU
 `tools/build_assets.py games/<g> build/<g>/gen` 会生成：
 - `game.chr`：8KB 的 NES 图案表（ca65 通过 `.incbin` 引入）
 - `tiles.c`：`chr_tiles[4096]`，内容和 CHR 一样，给软件渲染器用
-- `maps.c` 和 `assets.h`：地图、属性表、碰撞标志
+- `maps.c` 和 `assets.h`：地图、属性表、碰撞标志，以及 `game_palette` 的声明
+- `palette.c`：`game_palette[32]`，从 `palette.txt` 来
 - `tiles_gba.c`：`gba_tiles[8192]`，同一张图的 GBA 4bpp（每 tile 32 字节，低 nibble 是左边的像素）
 
-所以每个游戏只有一份图形源（`tiles.png`）和一份地图源，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会把 `songs.txt` 和 `music/*.fms.txt` 编成 `music.c`。
+所以每个游戏只有一份图形源（`tiles.png`）、一份调色板（`palette.txt`）和一份地图源，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会把 `songs.txt` 和 `music/*.fms.txt` 编成 `music.c`。
+
+地图文本可以在 `map:` 后面加可选的 `palmap:`，每格一位数字（0–3）。没有这一段时，调色板仍按 legend 里图块的 `pal=` 来，和以前的文件完全一样。同一 16×16 里如果出现两种非 0 调色板，采用先遇到的那个。
 
 ## 在 Ubuntu 26.04 上安装和编译
 ```sh
@@ -231,6 +235,14 @@ make GAME=platformer pc|uefi|img|nes|gba|all
 make games-all       # 两个游戏 × pc/uefi/img/nes（不含 gba）
 make clean           # 删除 build/（想完整重新编译时先执行它）
 ```
+编辑器还需要 Qt6。Ubuntu 26.04：
+
+```sh
+sudo apt install python3-pyside6 python3-pyside6.qtmultimedia python3-pil python3-numpy
+```
+
+没有这些包时：`python3 -m pip install --user PySide6 numpy`（Pillow 用 `python3-pil`）。安装和用法见下一节，细节在 `editor/README.md`。
+
 输出文件：`build/<game>/pc/<game>`、`build/<game>/uefi/BOOTX64.EFI` 和 `<game>.img`、`build/<game>/nes/<game>.nes`、`build/<game>/gba/<game>.gba`
 
 `make all` 会编 pc、uefi、img、nes。某个可选工具链没装时只打印一行 `skip <目标>: ...`，其余目标继续。直接执行 `make uefi`（或 `pc` / `img` / `nes`）时，工具链缺失仍然失败。`gba` 不在 `all` 里。
@@ -238,6 +250,30 @@ make clean           # 删除 build/（想完整重新编译时先执行它）
 GBA 不用 devkitARM，也不用 libtonc：Ubuntu 的仓库里没有这两个。工具链是 `gcc-arm-none-eabi`（`-marm -mcpu=arm7tdmi -ffreestanding -nostdlib`），启动代码和链接脚本在 `platform/gba/`。没有这套编译器时，`make all` 里的其他目标照常能编。
 
 卡头由 `tools/gbafix.py` 写入 12 字节标题和补码校验（`0xB2 = 0x96`）。它不写入任天堂 Logo。如果 PATH 里有 devkitARM 的 `gbafix`，Makefile 会改用那个，Logo 会写进去，真机 BIOS 才能过启动画面。mGBA 自带的 BIOS 不检查 Logo，可以直接运行这里编出来的 ROM。
+
+## 图形编辑器
+
+不用命令行也能改图、改地图、改音乐，再编译运行。界面是中文。
+
+```sh
+sudo apt install python3-pyside6 python3-pyside6.qtmultimedia python3-pil python3-numpy
+make editor-install          # 装到应用程序菜单
+python3 editor/retro_editor.py
+```
+
+`make editor-install` 把启动器写到 `~/.local/share/applications/`。菜单里的名字是「RetroEngine 编辑器」。也可以 `python3 editor/retro_editor.py games/platformer` 直接打开某个游戏。
+
+打开 `games/<名字>/` 之后：
+
+1. **图块**：画 `tiles.png` 里的 8×8 图块（4 色），可缩放、复制、翻转、撤销。
+2. **调色板**：从 NES 的 64 色里点选 32 个颜色，存进 `palette.txt`。
+3. **地图**：用真彩色涂格子，选图块和调色板，标实心。16×16 的属性块会画出来；勾上「统一 16×16 调色板」时，涂一格会把那一块的调色板改成同一个。黄线是屏幕分界。
+4. **音乐**：按通道改音符、速度、占空比、音量、循环，在编辑器里试听，也可以导入 FamiStudio 文本。保存进 `songs.txt`。
+5. **预览**：按游戏的上色方式看当前地图。
+6. **代码**：编辑 `game.c`（逻辑仍然是 C）。
+7. **编译**：PC / UEFI / NES / GBA。日志里会提示缺哪个 apt 包。「检查依赖」列出还要装什么。运行按钮会启动 PC 程序、fceux、mGBA 或 QEMU。
+
+`make run` 仍然只编译并启动当前游戏的 PC 版。新建游戏可以从空白模板，或复制 breakout / platformer。
 
 ## 运行
 - PC：`./build/platformer/pc/platformer`
@@ -308,3 +344,4 @@ make UEFI_LIBDIRS=/path/to/lib UEFI_INCDIR=/path/to/include/efi GAME=breakout ue
 - 修改背景 tile 不会自动更新碰撞地图（`tm_bind` 绑定的是 ROM 里的地图）。
 - 只支持水平滚动，最多两屏（512 像素）。GBA 以外的平台没有画面分割，所以滚动场景的 HUD 要用精灵来画。GBA 额外把地图最上面两行钉在屏幕顶部，见上面的「GBA 画面」。
 - GBA 不写入任天堂 Logo，真机原装 BIOS 会停在启动画面；模拟器和烧录卡上自带的 BIOS 替换一般能过。噪声音高是近似值。L/R 未使用。
+- 编辑器第一版不摆放金币、敌人这类对象，它们仍写在 `game.c` 里。地图的调色板按图块记在 legend 里；同一图块要在不同格子用不同调色板时，才写出 `palmap:`。试听用的合成器和 SDL 那一版一致，不是 NES APU 的逐周期模拟。
