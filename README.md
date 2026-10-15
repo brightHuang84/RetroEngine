@@ -22,7 +22,8 @@ flowchart TD
   A[games/&lt;name&gt;/tiles.png + *.txt/*.csv 地图] --> T[tools/build_assets.py<br>png2chr.py + png2gba.py + map2c.py]
   T --> CHR[game.chr → NES]
   T --> CA[tiles.c / tiles_gba.c / maps.c / assets.h → 各平台]
-  S[games/&lt;name&gt;/songs.txt] --> TM[tools/txt2mus.py]
+  S[games/&lt;name&gt;/songs.txt<br>以及 music/*.fms.txt] --> FM[tools/fms2mus.py]
+  FM --> TM[tools/txt2mus.py]
   TM --> MU[music.c / music.h → 所有平台]
   classDef g fill:#ffd
 ```
@@ -32,8 +33,8 @@ flowchart TD
 engine/   engine.h（公开 API） backend.h（后端接口） engine.c
 render/   render_soft.c/.h（PC 和 UEFI 共用） render_nes.c  render_gba.c
 platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,nes.cfg,nes.h}  gba/{main_gba.c,crt0.s,gba.ld,gba.h}
-games/    breakout/{game.c,tiles.png,play.txt,songs.txt}  platformer/{game.c,tiles.png,level.txt,songs.txt}
-tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py txt2mus.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua qemu_test.sh
+games/    breakout/{game.c,tiles.png,play.txt,songs.txt,music/*.fms.txt,fami/*.fms.txt}  platformer/ 同样
+tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py txt2mus.py fms2mus.py songs2fms.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua qemu_test.sh
 lib/      none.lib（cc65 运行库副本，用于离线编译）
 build/<game>/{pc,uefi,nes,gba,gen}/   编译输出
 shots/    测试截图
@@ -127,18 +128,54 @@ noise vol 6 mode 0
 - 四个通道各自循环。总帧数不一样时，`txt2mus.py` 会警告，听起来会慢慢错开。
 - `duty` 只对方波有意义：0 = 12.5%，1 = 25%，2 = 50%，3 = 75%。`vol` 是 0..15。
 
-`make` 会调用 `python3 tools/txt2mus.py games/<游戏>/songs.txt build/<游戏>/gen`，生成 `music.c` 和 `music.h`（里面有 `MUS_TITLE` 这类宏，以及 `music_lookup()`）。
+`make` 先用 `tools/fms2mus.py` 把 `songs.txt` 和 FamiStudio 文本合成 `build/<游戏>/gen/songs.gen.txt`，再调用 `tools/txt2mus.py` 生成 `music.c` 和 `music.h`（里面有 `MUS_TITLE` 这类宏，以及 `music_lookup()`）。`songs.txt` 里的歌排在前面。
 
 **写一首新曲子**
 
-1. 在 `games/<游戏>/songs.txt` 里加一段 `song mytune`。
+1. 在 `games/<游戏>/songs.txt` 里加一段 `song mytune`，或者用下面的 FamiStudio 流程。
 2. 先写 pulse1 的旋律，再让 pulse2、triangle、noise 的总时值和它相同。
 3. `make GAME=<游戏> pc`，用耳机听。想只录声音：`RETRO_WAV=tune.wav RETRO_TEST=/tmp/shot ./build/<游戏>/pc/<游戏>`。
 4. 在场景 `init` 里调用 `music_play(MUS_MYTUNE)`。
 
-**以后如果要从 FamiTracker / FamiStudio 导入**
+**用 FamiStudio 写曲子**
 
-这两个工具的四个旋律通道和这里一一对应：pulse1、pulse2、triangle、noise。FamiStudio 可以导出文本，FamiTracker 也可以导出文本或 MIDI。眼下没有导入器，把音高、时值和循环点抄进 `songs.txt` 即可。DPCM 采样不在范围内。
+FamiStudio 是原生桌面程序（Linux 上用 .NET 启动，也有 Flatpak）。四个旋律通道和引擎一一对应：Square1 → pulse1，Square2 → pulse2，Triangle → triangle，Noise → noise。
+
+在 Ubuntu 上安装官方压缩包：
+
+```sh
+sudo apt install dotnet-runtime-8.0
+# 从 https://famistudio.org/ 或 GitHub Releases 下载 FamiStudio453-LinuxAMD64.zip（4.5.x）
+unzip FamiStudio453-LinuxAMD64.zip -d ~/FamiStudio
+cd ~/FamiStudio && dotnet FamiStudio.dll
+```
+
+Flatpak 会自己带上依赖：`flatpak install flathub org.famistudio.FamiStudio`。文本格式跨小版本不兼容，打开工程时看 Project 行的 `Version`。这里的示例是 `4.5.3`。
+
+在引擎能播的范围内作曲：
+
+- 只用 Square1、Square2、Triangle、Noise。速度用 FamiStudio 模式，Groove 最好只写一个数（例如 `10`），这样一行就是固定的 NTSC 帧数，导入后时值是准的。两个数的摇摆 groove 会按播放器的垫帧规则展开成帧；一行内部的滑音和音量变化不会。
+- FamiTracker 速度也可以。tempo 150、speed 6 是每行 6 帧（NTSC）。标了 PAL 的工程仍按 60Hz 计算，听起来会偏快。
+- 方波的占空比和音量来自乐器。音量包络只留下峰值，占空比包络只留下第一个值。同一个通道里混了几种音量或占空比时，留下出现最多的那个，并打印警告。
+- 音符、休止、Stop、Release、pattern 的排列和 Loop point 会保留。Release 当成提前停音，不播释音包络。Loop point 是整首歌的，落在某个 pattern 列的开头。`-1` 表示每个通道只播一次。
+- 一条音符在引擎里最长 255 帧。更长的会拆成几段相同音高接在一起，波形不会重新触发。
+
+不会导入、但也不会让转换失败的内容：DPCM 采样和 DPCM 通道，扩展芯片（VRC6、VRC7、FDS、MMC5、N163、S5B、EPSM），滑音、颤音、琶音、微调音高、音量滑动。音高停在音符本身。`tools/fms2mus.py` 把这些写到标准错误。
+
+导出并编进游戏：
+
+1. File → Export → FamiStudio Text。
+2. 保存为 `games/<游戏>/music/歌名.fms.txt`。游戏目录根下的 `*.fms.txt` 也会被捡起来。`fami/` 下面的文件不会。
+3. `make GAME=<游戏> pc`。歌曲名字变成 `MUS_名字`（小写，其他字符变成下划线）。重名时会加上 `_2`，并打印警告。
+4. 在场景 `init` 里调用 `music_play(MUS_...)`。
+
+`games/breakout/music/sample.fms.txt` 是一首手写的示例，导入后是 `MUS_SAMPLE`（breakout 里排在 `MUS_TITLE`、`MUS_PLAY` 后面，编号 2）。`games/breakout/fami/breakout.fms.txt` 和 `games/platformer/fami/platformer.fms.txt` 是现有曲子导出的起点，用 FamiStudio 打开就能改。改完后导出到 `music/`，不要把这个起点本身放进 `music/`，否则会和 `title` / `play` 重名。重新生成起点：
+
+```sh
+python3 tools/songs2fms.py games/breakout/songs.txt games/breakout/fami/breakout.fms.txt
+```
+
+PC 上只听某一首、并且游戏里的 `music_play` 都改播它：`RETRO_MUS=2 RETRO_WAV=sample.wav RETRO_FRAMES=160 ./build/breakout/pc/breakout`。`RETRO_FRAMES` 按引擎帧计数。这只影响 SDL 测试，游戏代码不用调用 `music_lock`。
 
 **四个后端**
 
@@ -162,7 +199,7 @@ noise vol 6 mode 0
      ```
    - 或者用 Tiled 导出 CSV `level.csv`，再写一个配套的 `level.legend`（每行格式：`tile [pal=N] [solid]`）
    - 生成的代码包括 `map_level[]`、`map_level_attr[]`、`map_level_flags[]`，以及 `MAP_LEVEL_W/H`
-4. 写 `songs.txt`（至少一首循环；`make` 会用它生成 `music.h`）。格式见上面的「音频」。
+4. 写 `songs.txt`，或者在 `music/` 里放 FamiStudio 文本导出（至少一首循环；`make` 会生成 `music.h`）。格式见上面的「音频」。
 5. 写 `game.c`：只 `#include "../../engine/engine.h"`、`"assets.h"` 和 `"music.h"`，实现场景、`game_boot()`、`game_autopilot()`。要背景音乐就在场景 `init` 里调用 `music_play(MUS_...)`。
 6. `make GAME=mygame pc`（以及 uefi、img、nes、gba、all）
 
@@ -180,7 +217,7 @@ noise vol 6 mode 0
 - `maps.c` 和 `assets.h`：地图、属性表、碰撞标志
 - `tiles_gba.c`：`gba_tiles[8192]`，同一张图的 GBA 4bpp（每 tile 32 字节，低 nibble 是左边的像素）
 
-所以每个游戏只有一份图形源（`tiles.png`）和一份地图源，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会用 `tools/txt2mus.py` 把 `songs.txt` 编成 `music.c`。
+所以每个游戏只有一份图形源（`tiles.png`）和一份地图源，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会把 `songs.txt` 和 `music/*.fms.txt` 编成 `music.c`。
 
 ## 在 Ubuntu 26.04 上安装和编译
 ```sh
@@ -206,6 +243,7 @@ GBA 不用 devkitARM，也不用 libtonc：Ubuntu 的仓库里没有这两个。
 - PC：`./build/platformer/pc/platformer`
   - 测试模式：`RETRO_TEST=shots/x RETRO_SHOT_A=60 RETRO_SHOT_B=600 ./build/breakout/pc/breakout`
   - 把混合结果写成 WAV（不打开声卡）：`RETRO_WAV=breakout.wav RETRO_TEST=/tmp/br RETRO_SHOT_B=360 ./build/breakout/pc/breakout`
+  - 锁定某一首并录固定帧数：`RETRO_MUS=2 RETRO_WAV=sample.wav RETRO_FRAMES=160 ./build/breakout/pc/breakout`
 - UEFI：
   ```sh
   qemu-system-x86_64 -m 256 -net none \
@@ -263,7 +301,7 @@ make UEFI_LIBDIRS=/path/to/lib UEFI_INCDIR=/path/to/include/efi GAME=breakout ue
 
 ## 已知限制
 - UEFI 没有“按键松开”事件：引擎会在按键事件之后把它当作按住几帧（方向键 8 帧），持续按住要靠键盘自动重复。UEFI 只用 PC 喇叭，同一时刻一个音（pulse2 优先，然后 pulse1，然后三角波），噪声听不到。QEMU 要加 `-machine pcspk-audiodev=...` 才能出声。
-- 没有 DPCM。音效和乐曲和声共用 pulse2：音效响起时这一路的和声暂时让位，另外三路继续走，音效结束的下一帧和声回到当前音符（乐曲时钟没有停）。
+- 没有 DPCM。音效和乐曲和声共用 pulse2：音效响起时这一路的和声暂时让位，另外三路继续走，音效结束的下一帧和声回到当前音符（乐曲时钟没有停）。FamiStudio 里的音量包络、滑音、颤音、琶音、扩展芯片和 DPCM 导入时会被丢掉（有警告）。摇摆速度按帧展开，PAL 歌曲按 60Hz 播放。超过 255 帧的音符会拆成几段相同音高。
 - 三角波在 NES 上没有音量；SDL 会按 `vol` 缩放，UEFI 喇叭只把它当成开或关。
 - NES 每条扫描线最多 8 个精灵，背景色块是 16x16；fceux 默认会裁掉画面最上和最下各 8 行（屏幕顶部的 HUD 会被切掉一部分）。
 - 软件渲染器的 RGB 调色板和 fceux 的不完全一样，颜色会略有差异。

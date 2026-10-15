@@ -2,6 +2,8 @@
    RETRO_TEST=<prefix>: deterministic test mode using game_autopilot(); saves
    <prefix>_a.bmp at frame RETRO_SHOT_A (default 60) and <prefix>_b.bmp at RETRO_SHOT_B (default 600), then quits.
    RETRO_WAV=<path>: write one 60Hz frame of mixed audio (44100 Hz mono s16) per engine tick.
+   RETRO_MUS=<id>: lock playback to that song id (music_play from the game is redirected).
+   RETRO_FRAMES=<n>: exit after n engine frames.
    With RETRO_WAV set, the audio device is left closed so the file is the only consumer of the mixer. */
 #include <SDL2/SDL.h>
 #include <stdio.h>
@@ -142,8 +144,11 @@ static u8 keys(void){
 int main(int argc, char **argv){
   const char *test = getenv("RETRO_TEST");
   const char *wav_path = getenv("RETRO_WAV");
+  const char *mus = getenv("RETRO_MUS");
   int shot_a = getenv("RETRO_SHOT_A") ? atoi(getenv("RETRO_SHOT_A")) : 60;
   int shot_b = getenv("RETRO_SHOT_B") ? atoi(getenv("RETRO_SHOT_B")) : 600;
+  int max_frames = getenv("RETRO_FRAMES") ? atoi(getenv("RETRO_FRAMES")) : 0;
+  int audio_frames = 0;
   SDL_Window *w; SDL_Renderer *r; SDL_Texture *t; SDL_AudioSpec want;
   Uint64 freq, prev, acc = 0, step; int run = 1, frames = 0;
   (void)argc; (void)argv;
@@ -157,16 +162,20 @@ int main(int argc, char **argv){
   r = SDL_CreateRenderer(w, -1, SDL_RENDERER_PRESENTVSYNC); if(!r) r = SDL_CreateRenderer(w, -1, SDL_RENDERER_SOFTWARE);
   SDL_RenderSetLogicalSize(r, SCREEN_W, SCREEN_H);
   t = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SCREEN_W, SCREEN_H);
+  if(mus) music_lock((u8)atoi(mus));
   engine_init();
   freq = SDL_GetPerformanceFrequency(); step = freq / 60; prev = SDL_GetPerformanceCounter();
   while(run){
     SDL_Event e; Uint64 now;
     while(SDL_PollEvent(&e)){ if(e.type == SDL_QUIT) run = 0; if(e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) run = 0; }
-    if(test){ engine_frame(game_autopilot()); step_audio(); }
+    if(test){ engine_frame(game_autopilot()); step_audio(); audio_frames++; }
     else {
       now = SDL_GetPerformanceCounter(); acc += now - prev; prev = now;
       if(acc > step * 10) acc = step * 10;
-      while(acc >= step){ engine_frame(keys()); step_audio(); acc -= step; }
+      while(acc >= step){
+        engine_frame(keys()); step_audio(); audio_frames++; acc -= step;
+        if(max_frames && audio_frames >= max_frames) break;
+      }
     }
     soft_compose(fb);
     SDL_UpdateTexture(t, NULL, fb, SCREEN_W * 4);
@@ -175,6 +184,7 @@ int main(int argc, char **argv){
     frames++;
     if(test && frames == shot_a) save(test, "a");
     if(test && frames == shot_b){ save(test, "b"); run = 0; }
+    if(max_frames && audio_frames >= max_frames) run = 0;
   }
   wav_close();
   SDL_Quit(); return 0;

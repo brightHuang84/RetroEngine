@@ -94,16 +94,18 @@ static const u8 sfx_start[] = { 0, 1, 4, 9, 14, 21, 28 };
 static const Track *tr[4];
 static u16 mus_pos[4], mus_period[4];
 static u8 mus_timer[4], mus_gate[4];
-static u8 mus_paused, mus_master;
+static u8 mus_paused, mus_master, mus_lock, mus_lock_id;
 static u8 sfx_pos, sfx_left, sfx_on;
 static u16 sfx_period;
 
 void sfx(u8 id){
   if(id && id <= SFX_WIN){ sfx_pos = sfx_start[id]; sfx_left = 0; sfx_on = 1; }
 }
+void music_lock(u8 id){ mus_lock = 1; mus_lock_id = id; }
 void music_play(u8 id){
-  const Song *s = music_lookup(id);
-  u8 i;
+  const Song *s; u8 i;
+  if(mus_lock) id = mus_lock_id;
+  s = music_lookup(id);
   mus_paused = 0;
   for(i = 0; i < 4; i++){
     tr[i] = (s && s->ch[i]) ? s->ch[i] : 0;

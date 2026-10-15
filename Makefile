@@ -57,9 +57,14 @@ $(GEN)/assets.h $(GEN)/tiles.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/game.chr:
 	python3 tools/build_assets.py $(G) $(GEN)
 assets: $(GEN)/assets.h
 
-$(GEN)/music.c $(GEN)/music.h: $(G)/songs.txt tools/txt2mus.py
+# songs.txt is hand-written. *.fms.txt in the game directory or in music/ is
+# FamiStudio text (File > Export > FamiStudio Text) and is converted first.
+FMS_SRC := $(sort $(wildcard $(G)/*.fms.txt $(G)/music/*.fms.txt))
+MUS_IN  := $(wildcard $(G)/songs.txt) $(FMS_SRC)
+$(GEN)/music.c $(GEN)/music.h: $(MUS_IN) tools/txt2mus.py tools/fms2mus.py
 	@mkdir -p $(GEN)
-	python3 tools/txt2mus.py $(G)/songs.txt $(GEN)
+	python3 tools/fms2mus.py --out $(GEN)/songs.gen.txt $(MUS_IN)
+	python3 tools/txt2mus.py $(GEN)/songs.gen.txt $(GEN)
 
 # ---------------- PC / SDL2 ----------------
 PC_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_soft.c platform/sdl/main_sdl.c $(GEN)/tiles.c $(GEN)/maps.c $(MUS_SRC)

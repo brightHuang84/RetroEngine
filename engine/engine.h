@@ -69,6 +69,7 @@ typedef struct Song { const Track *ch[4]; } Song;
 enum { SFX_NONE, SFX_BLIP, SFX_HIT, SFX_COIN, SFX_JUMP, SFX_LOSE, SFX_WIN };
 void sfx(u8 id);                              /* steals pulse2 until the effect ends; ids unchanged */
 void music_play(u8 id);                       /* game supplies music_lookup */
+void music_lock(u8 id);                       /* later music_play calls use this id */
 void music_stop(void);
 void music_pause(u8 on);                      /* nonzero freezes the sequencer and holds current notes */
 void music_volume(u8 vol);                    /* 0..15, music only; sound effects stay full */
