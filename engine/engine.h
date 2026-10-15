@@ -85,4 +85,16 @@ u8 aabb(s16 ax, s16 ay, u8 aw, u8 ah, s16 bx, s16 by, u8 bw, u8 bh);
 void tm_bind(const u8 *map, u8 w, u8 h, const u8 *flags256); /* collision map (usually same as bg_load) */
 u8   tm_flags_at(s16 px, s16 py);             /* flags of tile at world pixel; outside map = solid */
 u16  rnd(void);
+
+/* ---------- entities (ROM tables from entities.txt + the map) ----------
+   One record is ENT_BYTES bytes: type, x lo/hi, y, then 4 little-endian u16 props.
+   A map holds at most ENT_MAX records. 255 from ent_find means "not found". */
+#define ENT_MAX  32
+#define ENT_BYTES 12
+#define ent_ptr(base, i) ((const u8 *)((base) + (u16)(i) * (u16)ENT_BYTES))
+#define ent_type(p) ((p)[0])
+#define ent_x(p) ((u16)((p)[1] | ((u16)(p)[2] << 8)))
+#define ent_y(p) ((p)[3])
+#define ent_prop(p, n) ((u16)((p)[4 + (u16)(n) * 2] | ((u16)(p)[5 + (u16)(n) * 2] << 8)))
+u8 ent_find(const u8 *ents, u8 n, u8 type);
 #endif

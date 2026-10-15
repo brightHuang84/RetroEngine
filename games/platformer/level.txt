@@ -37,3 +37,12 @@ gggggggggggggggggggggggggggggggggggggggg...ggggggggggggggggggggg
 dddddddddddddddddddddddddddddddddddddddd...ddddddddddddddddddddd
 dddddddddddddddddddddddddddddddddddddddd...ddddddddddddddddddddd
 dddddddddddddddddddddddddddddddddddddddd...ddddddddddddddddddddd
+entities:
+player 16 192
+coin 56 196
+coin 96 156
+coin 160 124
+coin 232 156
+coin 376 148
+coin 440 116
+enemy 280 200 left=264 right=312

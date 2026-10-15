@@ -9,21 +9,16 @@
 #define T_LEG2 0xA2
 #define T_COIN 0xB0
 #define T_ENEMY 0xB8
-#define NCOINS 6
-#define START_X 16
-#define START_Y 192
 #define GRAVITY 3          /* 1/16 px per frame^2 */
 #define JUMP_V  (-72)      /* -4.5 px/frame */
 #define MAX_FALL 80
 #define RUN_V   24         /* 1.5 px/frame */
 
-static const s16 coin_x[NCOINS] = { 56, 96, 160, 232, 376, 440 };
-static const s16 coin_y[NCOINS] = { 196, 156, 124, 156, 148, 116 };
-
 static fx px, py, pvx, pvy;
 static u8 on_ground, facing_left, coins_got, lives, won, anim;
-static u8 coin_taken[NCOINS];
-static s16 ex; static s8 edir; static u8 enemy_alive;
+static u8 ncoins, coin_taken[ENT_MAX];
+static s16 start_x, start_y;
+static s16 ex, ey, eleft, eright; static s8 edir; static u8 enemy_alive;
 static u16 score, cam;
 extern const Scene title_scene, play_scene, end_scene;
 
@@ -43,13 +38,28 @@ const Scene title_scene = { title_init, title_update, title_draw };
 
 /* ---------- play ---------- */
 static u8 solid(s16 x, s16 y){ return (u8)(tm_flags_at(x, y) & TF_SOLID); }
-static void respawn(void){ px = FX(START_X); py = FX(START_Y); pvx = 0; pvy = 0; facing_left = 0; }
+static void load_spawns(void){
+  u8 i, slot; const u8 *e;
+  start_x = 16; start_y = 192; ncoins = 0;
+  enemy_alive = 0; ex = 280; ey = 200; eleft = 264; eright = 312; edir = 1;
+  for(i = 0; i < ENT_MAX; i++) coin_taken[i] = 0;
+  slot = ent_find(map_level_ent, MAP_LEVEL_ENT_N, ENT_PLAYER);
+  if(slot != 255){ e = ent_ptr(map_level_ent, slot); start_x = (s16)ent_x(e); start_y = ent_y(e); }
+  slot = ent_find(map_level_ent, MAP_LEVEL_ENT_N, ENT_ENEMY);
+  if(slot != 255){
+    e = ent_ptr(map_level_ent, slot);
+    enemy_alive = 1; ex = (s16)ent_x(e); ey = ent_y(e);
+    eleft = (s16)ent_prop(e, 0); eright = (s16)ent_prop(e, 1);
+  }
+  for(i = 0; i < MAP_LEVEL_ENT_N; i++)
+    if(ent_type(ent_ptr(map_level_ent, i)) == ENT_COIN) ncoins++;
+}
+static void respawn(void){ px = FX(start_x); py = FX(start_y); pvx = 0; pvy = 0; facing_left = 0; }
 static void play_init(void){
-  u8 i;
   bg_load(map_level, MAP_LEVEL_W, MAP_LEVEL_H, map_level_attr);
   tm_bind(map_level, MAP_LEVEL_W, MAP_LEVEL_H, map_level_flags);
-  for(i = 0; i < NCOINS; i++) coin_taken[i] = 0;
-  coins_got = 0; score = 0; lives = 3; ex = 280; edir = 1; enemy_alive = 1; cam = 0;
+  load_spawns();
+  coins_got = 0; score = 0; lives = 3; cam = 0;
   respawn();
   music_play(MUS_PLAY);
 }
@@ -84,15 +94,18 @@ static void play_update(void){
   move_player();
   x = FX_INT(px); y = FX_INT(py);
   if(pvx) anim++;
-  for(i = 0; i < NCOINS; i++)
-    if(!coin_taken[i] && aabb(x, y, 8, 16, coin_x[i], coin_y[i], 8, 8)){
+  for(i = 0; i < MAP_LEVEL_ENT_N; i++){
+    const u8 *e = ent_ptr(map_level_ent, i);
+    if(ent_type(e) != ENT_COIN || coin_taken[i]) continue;
+    if(aabb(x, y, 8, 16, (s16)ent_x(e), ent_y(e), 8, 8)){
       coin_taken[i] = 1; ++coins_got; score += 100; sfx(SFX_COIN);
-      if(coins_got == NCOINS){ won = 1; sfx(SFX_WIN); scene_go(&end_scene); }
+      if(coins_got == ncoins){ won = 1; sfx(SFX_WIN); scene_go(&end_scene); }
     }
+  }
   if(enemy_alive){
-    if(frame_count & 1){ ex += edir; if(ex < 264 || ex > 312) edir = (s8)-edir; }
-    if(aabb(x, y, 8, 16, ex, 200, 8, 8)){
-      if(pvy > 0 && y + 12 < 200){ enemy_alive = 0; score += 50; pvy = JUMP_V / 2; sfx(SFX_HIT); }
+    if(frame_count & 1){ ex += edir; if(ex < eleft || ex > eright) edir = (s8)-edir; }
+    if(aabb(x, y, 8, 16, ex, ey, 8, 8)){
+      if(pvy > 0 && y + 12 < ey){ enemy_alive = 0; score += 50; pvy = JUMP_V / 2; sfx(SFX_HIT); }
       else lose_life();
     }
   }
@@ -107,10 +120,13 @@ static void play_draw(void){
   spr(x, y + 8, (on_ground && pvx && (anim & 8)) ? T_LEG2 : T_LEG1, a);
   /* HUD as sprites (background scrolls) - max 8 sprites per scanline on NES */
   spr_number(8, 8, score, 5, 3);
-  spr(8, 20, T_COIN, 1); spr_number(20, 20, coins_got, 1, 3); spr(28, 20, '/', 3); spr_number(36, 20, NCOINS, 1, 3);
+  spr(8, 20, T_COIN, 1); spr_number(20, 20, coins_got, 1, 3); spr(28, 20, '/', 3); spr_number(36, 20, ncoins, 1, 3);
   spr(216, 20, T_HEAD, 0); spr(226, 20, 'X', 3); spr_number(236, 20, lives, 1, 3);
-  for(i = 0; i < NCOINS; i++) if(!coin_taken[i]) spr(coin_x[i] - (s16)cam, coin_y[i], T_COIN, 1);
-  if(enemy_alive) spr(ex - (s16)cam, 200, T_ENEMY, (u8)(2 | ((frame_count & 16) ? SPR_FLIPH : 0)));
+  for(i = 0; i < MAP_LEVEL_ENT_N; i++){
+    const u8 *e = ent_ptr(map_level_ent, i);
+    if(ent_type(e) == ENT_COIN && !coin_taken[i]) spr((s16)ent_x(e) - (s16)cam, ent_y(e), T_COIN, 1);
+  }
+  if(enemy_alive) spr(ex - (s16)cam, ey, T_ENEMY, (u8)(2 | ((frame_count & 16) ? SPR_FLIPH : 0)));
 }
 const Scene play_scene = { play_init, play_update, play_draw };
 

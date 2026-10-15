@@ -189,6 +189,14 @@ u8 tm_flags_at(s16 px, s16 py){
 }
 u16 rnd(void){ seed ^= seed << 7; seed ^= seed >> 9; seed ^= seed << 8; return seed; }
 
+u8 ent_find(const u8 *ents, u8 n, u8 type){
+  u8 i;
+  if(!ents) return 255;
+  for(i = 0; i < n; i++)
+    if(ents[(u16)i * ENT_BYTES] == type) return i;
+  return 255;
+}
+
 /* ---- main loop ---- */
 void engine_init(void){ mus_master = 12; r_init(); oam = r_oam(); next = game_boot(); }
 void engine_frame(u8 raw){

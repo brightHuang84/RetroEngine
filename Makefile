@@ -7,7 +7,7 @@ GEN  := $(B)/gen
 ENGINE_SRC := engine/engine.c
 GAME_SRC   := $(G)/game.c
 HDRS := engine/engine.h engine/backend.h $(GEN)/assets.h $(GEN)/music.h
-ASSET_SRC := $(G)/tiles.png $(wildcard $(G)/*.txt $(G)/*.csv $(G)/*.legend) tools/png2chr.py tools/png2gba.py tools/map2c.py tools/build_assets.py
+ASSET_SRC := $(G)/tiles.png $(wildcard $(G)/*.txt $(G)/*.csv $(G)/*.legend) tools/png2chr.py tools/png2gba.py tools/map2c.py tools/ent2c.py tools/build_assets.py
 MUS_SRC := $(GEN)/music.c
 
 # `all` tries every optional target. A missing toolchain prints "skip <target>"

@@ -11,7 +11,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from PySide6.QtCore import Qt, QProcess, QByteArray, QBuffer, QIODevice
+    from PySide6.QtCore import Qt, QProcess, QByteArray, QBuffer, QIODevice, QEvent, QObject, QSize
     from PySide6.QtGui import (
         QFont, QColor, QImage, QPainter, QPen, QIcon, QSyntaxHighlighter, QTextCharFormat,
     )
@@ -20,7 +20,7 @@ try:
         QLabel, QPushButton, QScrollArea, QComboBox, QSpinBox, QCheckBox, QPlainTextEdit,
         QListWidget, QTableWidget, QTableWidgetItem, QFileDialog, QMessageBox, QInputDialog,
         QDialog, QDialogButtonBox, QLineEdit, QGroupBox, QRadioButton, QButtonGroup,
-        QStatusBar,
+        QStatusBar, QFormLayout, QListWidgetItem,
     )
 except ImportError:
     sys.stderr.write('缺少 PySide6。\n')
@@ -37,26 +37,26 @@ APP_FONT = 'WenQuanYi Micro Hei'
 
 class Hist(object):
     def __init__(self):
-        self.undo = []
-        self.redo = []
+        self.past = []
+        self.future = []
 
     def push(self, state):
-        self.undo.append(state)
-        self.redo.clear()
-        if len(self.undo) > 40:
-            del self.undo[0]
+        self.past.append(state)
+        self.future.clear()
+        if len(self.past) > 40:
+            del self.past[0]
 
     def undo(self, current):
-        if not self.undo:
+        if not self.past:
             return None
-        self.redo.append(current)
-        return self.undo.pop()
+        self.future.append(current)
+        return self.past.pop()
 
     def redo(self, current):
-        if not self.redo:
+        if not self.future:
             return None
-        self.undo.append(current)
-        return self.redo.pop()
+        self.past.append(current)
+        return self.future.pop()
 
 
 class CHighlighter(QSyntaxHighlighter):
@@ -123,7 +123,45 @@ def sheet_image(tiles, palette, cell, backdrop=None):
     return img
 
 
-def map_image(project, game_map, scale, grid=True, screens=True, conflicts=True):
+def blit_sprite_tile(img, tiles, palette, pal, tile, wx, wy, scale):
+    """One 8x8 sprite tile. Sprite color 0 is transparent."""
+    base = 16 + (pal & 3) * 4
+    group = palette[base:base + 4]
+    for y in range(8):
+        for x in range(8):
+            v = tiles.tile_get(tile & 255, x, y)
+            if not v:
+                continue
+            fill_rect(img, (wx + x) * scale, (wy + y) * scale, scale, scale, data.rgb_of(group[v]))
+
+
+def draw_map_entities(img, project, game_map, scale):
+    spec = getattr(project, 'entity_spec', None)
+    if spec is None:
+        return
+    for ent in game_map.entities:
+        et = spec.by_name(ent.type)
+        if et is None:
+            continue
+        for dx, dy, tile in et.sprites:
+            blit_sprite_tile(img, project.tiles, project.palette, et.pal, tile,
+                             int(ent.x) + dx, int(ent.y) + dy, scale)
+
+
+def entity_icon(project, et, scale=3):
+    right = 8
+    bottom = 8
+    for dx, dy, _tile in et.sprites:
+        right = max(right, dx + 8, et.w)
+        bottom = max(bottom, dy + 8, et.h)
+    img = QImage(max(1, right * scale), max(1, bottom * scale), QImage.Format_RGB32)
+    img.fill(QColor('#111111'))
+    for dx, dy, tile in et.sprites:
+        blit_sprite_tile(img, project.tiles, project.palette, et.pal, tile, dx, dy, scale)
+    return QIcon(QPixmap_from(img))
+
+
+def map_image(project, game_map, scale, grid=True, screens=True, conflicts=True, selected=None):
     w, h = game_map.w, game_map.h
     attrs = data.attribute_bytes(w, h, game_map.effective_pal)
     img = QImage(max(1, w * 8 * scale), max(1, h * 8 * scale), QImage.Format_RGB32)
@@ -139,6 +177,7 @@ def map_image(project, game_map, scale, grid=True, screens=True, conflicts=True)
                     v = project.tiles.tile_get(tile, px, py)
                     rgb = data.rgb_of(backdrop if v == 0 else group[v])
                     fill_rect(img, (tx * 8 + px) * scale, (ty * 8 + py) * scale, scale, scale, rgb)
+    draw_map_entities(img, project, game_map, scale)
     painter = QPainter(img)
     if grid:
         painter.setPen(QPen(QColor(255, 255, 255, 50)))
@@ -157,6 +196,14 @@ def map_image(project, game_map, scale, grid=True, screens=True, conflicts=True)
         painter.setPen(QPen(QColor('#ff4040'), 2))
         for x, y, _pals in data.attribute_conflicts(w, h, game_map.effective_pal):
             painter.drawRect(x * 8 * scale, y * 8 * scale, 16 * scale - 1, 16 * scale - 1)
+    if selected is not None and 0 <= selected < len(game_map.entities):
+        ent = game_map.entities[selected]
+        et = project.entity_spec.by_name(ent.type) if getattr(project, 'entity_spec', None) else None
+        ew = et.w if et else 8
+        eh = et.h if et else 8
+        painter.setPen(QPen(QColor('#ffe14a'), max(1, scale)))
+        painter.drawRect(int(ent.x) * scale, int(ent.y) * scale,
+                         max(1, ew * scale - 1), max(1, eh * scale - 1))
     painter.end()
     return img
 
@@ -473,12 +520,17 @@ class MapView(QLabel):
         QLabel.__init__(self)
         self.tab = tab
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def _cell(self, event):
         scale = self.tab.scale
         return int(event.position().x()) // (8 * scale), int(event.position().y()) // (8 * scale)
 
     def mousePressEvent(self, event):
+        self.setFocus()
+        if self.tab.mode == 'entity':
+            self.tab.ent_press(event)
+            return
         x, y = self._cell(event)
         if event.button() == Qt.RightButton:
             self.tab.sample(x, y)
@@ -488,14 +540,24 @@ class MapView(QLabel):
             self.tab.paint_cell(x, y)
 
     def mouseMoveEvent(self, event):
+        if self.tab.mode == 'entity':
+            self.tab.ent_move(event)
+            return
         x, y = self._cell(event)
         self.tab.hover(x, y)
         if event.buttons() & Qt.LeftButton:
             self.tab.paint_cell(x, y)
 
     def mouseReleaseEvent(self, event):
+        self.tab._drag = None
         self.tab._stroke = False
         QLabel.mouseReleaseEvent(self, event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.tab.delete_selected()
+            return
+        QLabel.keyPressEvent(self, event)
 
 
 class MapTab(QWidget):
@@ -506,34 +568,83 @@ class MapTab(QWidget):
         self.scale = 2
         self.tile = 0x20
         self.pal = 0
+        self.mode = 'tile'
+        self.selected = None
         self.hist = Hist()
         self._stroke = False
+        self._drag = None
+        self._prop_lock = False
+        self._prop_undo = False
+        self._prop_sig = None
+        self._prop_spins = {}
         root = QHBoxLayout(self)
         side = QVBoxLayout()
         self.map_box = QComboBox()
         self.map_box.currentIndexChanged.connect(self._map_changed)
         side.addWidget(QLabel('地图'))
         side.addWidget(self.map_box)
+        self.mode_box = QComboBox()
+        self.mode_box.addItem('图块')
+        self.mode_box.addItem('实体')
+        self.mode_box.currentIndexChanged.connect(self._set_mode)
+        side.addWidget(QLabel('图层'))
+        side.addWidget(self.mode_box)
+        self.tile_panel = QWidget()
+        tile_lay = QVBoxLayout(self.tile_panel)
+        tile_lay.setContentsMargins(0, 0, 0, 0)
         self.picker = QLabel()
         self.picker.mousePressEvent = self._pick_tile
         scroll_p = QScrollArea()
         scroll_p.setWidget(self.picker)
         scroll_p.setMinimumWidth(250)
-        scroll_p.setMaximumWidth(280)
-        side.addWidget(scroll_p, 1)
+        scroll_p.setMaximumWidth(300)
+        tile_lay.addWidget(scroll_p, 1)
         self.pal_group = QButtonGroup(self)
         for i in range(4):
             rb = QRadioButton('背景调色板 %d' % i)
             self.pal_group.addButton(rb, i)
-            side.addWidget(rb)
+            tile_lay.addWidget(rb)
         self.pal_group.button(0).setChecked(True)
         self.pal_group.idClicked.connect(self._set_pal)
         self.solid = QCheckBox('实心（这一种图块共用）')
         self.solid.toggled.connect(self._solid)
-        side.addWidget(self.solid)
+        tile_lay.addWidget(self.solid)
         self.auto = QCheckBox('画的时候统一 16×16 调色板')
         self.auto.setChecked(True)
-        side.addWidget(self.auto)
+        tile_lay.addWidget(self.auto)
+        side.addWidget(self.tile_panel, 1)
+        self.ent_panel = QWidget()
+        ent_lay = QVBoxLayout(self.ent_panel)
+        ent_lay.setContentsMargins(0, 0, 0, 0)
+        ent_lay.addWidget(QLabel('实体类型'))
+        self.type_list = QListWidget()
+        self.type_list.setIconSize(QSize(48, 32))
+        self.type_list.setMinimumHeight(96)
+        ent_lay.addWidget(self.type_list, 1)
+        edit_types = QPushButton('编辑类型…')
+        edit_types.clicked.connect(self.edit_types)
+        ent_lay.addWidget(edit_types)
+        self.snap = QCheckBox('吸附到 8 像素')
+        self.snap.setChecked(True)
+        ent_lay.addWidget(self.snap)
+        self.count_label = QLabel('已放置 0 / 0')
+        ent_lay.addWidget(self.count_label)
+        ent_lay.addWidget(QLabel('这张图上的实体'))
+        self.placed = QListWidget()
+        self.placed.setMinimumHeight(80)
+        self.placed.currentRowChanged.connect(self._pick_placed)
+        ent_lay.addWidget(self.placed, 1)
+        remove = QPushButton('删除选中')
+        remove.clicked.connect(self.delete_selected)
+        ent_lay.addWidget(remove)
+        self.prop_host = QWidget()
+        self.prop_form = QFormLayout(self.prop_host)
+        self.prop_form.setContentsMargins(0, 0, 0, 0)
+        ent_lay.addWidget(self.prop_host)
+        self.ent_panel.setVisible(False)
+        self.ent_panel.setMaximumWidth(300)
+        self.tile_panel.setMaximumWidth(300)
+        side.addWidget(self.ent_panel, 1)
         self.grid = QCheckBox('显示 16×16 网格和屏幕分界')
         self.grid.setChecked(True)
         self.grid.toggled.connect(lambda _v: self.refresh())
@@ -558,11 +669,15 @@ class MapTab(QWidget):
     def load(self, project):
         self.project = project
         self.hist = Hist()
+        self.selected = None
+        self._drag = None
+        self._prop_sig = None
         self.map_box.blockSignals(True)
         self.map_box.clear()
         for m in project.maps:
             self.map_box.addItem('%s  (%d×%d)' % (m.name, m.w, m.h), m.name)
         self.map_box.blockSignals(False)
+        self._fill_types()
         self.refresh()
 
     def current(self):
@@ -572,6 +687,15 @@ class MapTab(QWidget):
         return self.project.map_by_name(name)
 
     def _map_changed(self, _i):
+        self.selected = None
+        self._drag = None
+        self._prop_sig = None
+        self.refresh()
+
+    def _set_mode(self, idx):
+        self.mode = 'entity' if idx == 1 else 'tile'
+        self.tile_panel.setVisible(self.mode == 'tile')
+        self.ent_panel.setVisible(self.mode == 'entity')
         self.refresh()
 
     def _zoom(self, value):
@@ -657,11 +781,21 @@ class MapTab(QWidget):
         m = self.current()
         if not m:
             return
-        img = map_image(self.project, m, self.scale, self.grid.isChecked(), self.grid.isChecked(), True)
+        sel = self.selected if self.mode == 'entity' else None
+        img = map_image(self.project, m, self.scale, self.grid.isChecked(), self.grid.isChecked(), True, sel)
         self.view.setPixmap(QPixmap_from(img))
         self.view.resize(img.size())
         conf = data.attribute_conflicts(m.w, m.h, m.effective_pal)
-        if conf:
+        if self.mode == 'entity':
+            limit = self.project.entity_spec.limit
+            self.count_label.setText('已放置 %d / %d' % (len(m.entities), limit))
+            self._fill_placed()
+            self._fill_props()
+            note = '左键放置或拖动，右键或 Delete 删除。黄框是选中的实体。'
+            if conf:
+                note += ' 另外有 %d 处属性块冲突。' % len(conf)
+            self.hover_label.setText(note)
+        elif conf:
             x, y, pals = conf[0]
             extra = '，例如 (%d,%d) 调色板 %s' % (x, y, ' 和 '.join(str(p) for p in pals))
             self.hover_label.setText('属性块冲突 %d 处%s。引擎采用该块里第一个非 0 调色板。' % (len(conf), extra))
@@ -676,6 +810,9 @@ class MapTab(QWidget):
         prev = self.hist.undo(m.copy_state())
         if prev is not None:
             m.restore_state(prev)
+            self.selected = None
+            self._drag = None
+            self._prop_sig = None
             self.project.dirty['maps'] = True
             self.refresh()
 
@@ -686,8 +823,257 @@ class MapTab(QWidget):
         nxt = self.hist.redo(m.copy_state())
         if nxt is not None:
             m.restore_state(nxt)
+            self.selected = None
+            self._drag = None
+            self._prop_sig = None
             self.project.dirty['maps'] = True
             self.refresh()
+
+    def _world(self, event):
+        scale = max(1, self.scale)
+        return int(event.position().x()) // scale, int(event.position().y()) // scale
+
+    def _clamp(self, x, y):
+        m = self.current()
+        if not m:
+            return 0, 0
+        max_x = max(0, m.w * 8 - 1)
+        max_y = max(0, min(255, m.h * 8 - 1))
+        return max(0, min(max_x, int(x))), max(0, min(max_y, int(y)))
+
+    def _snap_xy(self, x, y):
+        if self.snap.isChecked():
+            x = (int(x) // 8) * 8
+            y = (int(y) // 8) * 8
+        return self._clamp(x, y)
+
+    def _hit(self, x, y):
+        m = self.current()
+        if not m or not self.project:
+            return None
+        for i in range(len(m.entities) - 1, -1, -1):
+            ent = m.entities[i]
+            et = self.project.entity_spec.by_name(ent.type)
+            w = et.w if et else 8
+            h = et.h if et else 8
+            if ent.x <= x < ent.x + w and ent.y <= y < ent.y + h:
+                return i
+        return None
+
+    def _current_type(self):
+        if not self.project:
+            return None
+        item = self.type_list.currentItem()
+        if item is None and self.type_list.count():
+            self.type_list.setCurrentRow(0)
+            item = self.type_list.currentItem()
+        if item is None:
+            return None
+        return self.project.entity_spec.by_name(item.data(Qt.ItemDataRole.UserRole))
+
+    def _fill_types(self):
+        if not self.project:
+            return
+        current = None
+        item = self.type_list.currentItem()
+        if item is not None:
+            current = item.data(Qt.ItemDataRole.UserRole)
+        self.type_list.blockSignals(True)
+        self.type_list.clear()
+        for et in self.project.entity_spec.types:
+            label = et.label or et.name
+            row = QListWidgetItem('%s  (%s)' % (label, et.name))
+            row.setData(Qt.ItemDataRole.UserRole, et.name)
+            row.setIcon(entity_icon(self.project, et))
+            self.type_list.addItem(row)
+            if et.name == current:
+                self.type_list.setCurrentItem(row)
+        if self.type_list.currentRow() < 0 and self.type_list.count():
+            self.type_list.setCurrentRow(0)
+        self.type_list.blockSignals(False)
+
+    def _fill_placed(self):
+        m = self.current()
+        if not m or not self.project:
+            return
+        self.placed.blockSignals(True)
+        self.placed.clear()
+        for ent in m.entities:
+            et = self.project.entity_spec.by_name(ent.type)
+            label = et.label if et and et.label else ent.type
+            self.placed.addItem('%s  %d,%d' % (label, ent.x, ent.y))
+        if self.selected is not None and 0 <= self.selected < self.placed.count():
+            self.placed.setCurrentRow(self.selected)
+        self.placed.blockSignals(False)
+
+    def _pick_placed(self, row):
+        if row < 0:
+            return
+        self.selected = row
+        self._prop_sig = None
+        self.refresh()
+
+    def _clear_props(self):
+        while self.prop_form.rowCount():
+            self.prop_form.removeRow(0)
+        self._prop_spins = {}
+
+    def _fill_props(self):
+        m = self.current()
+        ent = None
+        if m and self.selected is not None and 0 <= self.selected < len(m.entities):
+            ent = m.entities[self.selected]
+        sig = None if ent is None else (id(m), self.selected, ent.type)
+        if sig == self._prop_sig and ent is not None and self._drag:
+            self._prop_lock = True
+            for key, spin in self._prop_spins.items():
+                spin.blockSignals(True)
+                if key == 'x':
+                    spin.setValue(ent.x)
+                elif key == 'y':
+                    spin.setValue(ent.y)
+                else:
+                    spin.setValue(int(ent.props.get(key, 0)))
+                spin.blockSignals(False)
+            self._prop_lock = False
+            return
+        if sig == self._prop_sig:
+            return
+        self._prop_sig = sig
+        self._prop_undo = False
+        self._clear_props()
+        if ent is None:
+            return
+        et = self.project.entity_spec.by_name(ent.type)
+        self._add_prop_spin('x', 'x', ent.x, 65535)
+        self._add_prop_spin('y', 'y', ent.y, 255)
+        names = [p[0] for p in et.props] if et else sorted(ent.props)
+        for name in names:
+            default = dict(et.props).get(name, 0) if et else 0
+            self._add_prop_spin(name, name, int(ent.props.get(name, default)), 65535)
+
+    def _add_prop_spin(self, key, label, value, top):
+        spin = QSpinBox()
+        spin.setRange(0, top)
+        spin.setValue(int(value))
+        spin.valueChanged.connect(lambda v, k=key: self._set_field(k, v))
+        spin.editingFinished.connect(self._prop_done)
+        self.prop_form.addRow(label, spin)
+        self._prop_spins[key] = spin
+
+    def _prop_done(self):
+        self._prop_undo = False
+
+    def _set_field(self, key, value):
+        if self._prop_lock:
+            return
+        m = self.current()
+        if not m or self.selected is None or not (0 <= self.selected < len(m.entities)):
+            return
+        if not self._prop_undo:
+            self.hist.push(m.copy_state())
+            self._prop_undo = True
+        ent = m.entities[self.selected]
+        if key == 'x':
+            ent.x = self._clamp(value, ent.y)[0]
+        elif key == 'y':
+            ent.y = self._clamp(ent.x, value)[1]
+        else:
+            ent.props[key] = int(value) & 65535
+        self.project.dirty['maps'] = True
+        self.refresh()
+
+    def edit_types(self):
+        if not self.project:
+            return
+        dialog = EntityTypeDialog(self.project, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._prop_sig = None
+        self._fill_types()
+        self.refresh()
+
+    def ent_press(self, event):
+        m = self.current()
+        if not m or not self.project:
+            return
+        x, y = self._world(event)
+        if event.button() == Qt.RightButton:
+            hit = self._hit(x, y)
+            if hit is None:
+                return
+            self.hist.push(m.copy_state())
+            del m.entities[hit]
+            self.selected = None
+            self._prop_sig = None
+            self.project.dirty['maps'] = True
+            self.refresh()
+            return
+        if event.button() != Qt.LeftButton:
+            return
+        hit = self._hit(x, y)
+        if hit is not None:
+            self.hist.push(m.copy_state())
+            self.selected = hit
+            self._prop_sig = None
+            ent = m.entities[hit]
+            self._drag = (hit, x - ent.x, y - ent.y)
+            self.refresh()
+            return
+        et = self._current_type()
+        if et is None:
+            self.hover_label.setText('先在「编辑类型」里加一种实体。')
+            return
+        if len(m.entities) >= self.project.entity_spec.limit:
+            self.hover_label.setText('这张图已经有 %d 个实体，上限是 %d。' % (
+                len(m.entities), self.project.entity_spec.limit))
+            return
+        self.hist.push(m.copy_state())
+        sx, sy = self._snap_xy(x, y)
+        m.entities.append(data.ent2c.Entity(et.name, sx, sy, dict(et.props)))
+        self.selected = len(m.entities) - 1
+        self._prop_sig = None
+        self._drag = (self.selected, x - sx, y - sy)
+        self.project.dirty['maps'] = True
+        self.refresh()
+
+    def ent_move(self, event):
+        x, y = self._world(event)
+        m = self.current()
+        hit = self._hit(x, y) if m else None
+        if m and hit is not None:
+            ent = m.entities[hit]
+            self.hover_label.setText('%s  (%d,%d)' % (ent.type, ent.x, ent.y))
+        elif m:
+            sx, sy = self._snap_xy(x, y)
+            self.hover_label.setText('放置点 (%d,%d)' % (sx, sy))
+        if not (event.buttons() & Qt.LeftButton) or not self._drag or not m:
+            return
+        index, ox, oy = self._drag
+        if not 0 <= index < len(m.entities):
+            return
+        nx, ny = self._snap_xy(x - ox, y - oy)
+        ent = m.entities[index]
+        if ent.x == nx and ent.y == ny:
+            return
+        ent.x, ent.y = nx, ny
+        self.project.dirty['maps'] = True
+        self.refresh()
+        self.hover_label.setText('%s  (%d,%d)' % (ent.type, ent.x, ent.y))
+
+    def delete_selected(self):
+        if self.mode != 'entity':
+            return
+        m = self.current()
+        if not m or self.selected is None or not (0 <= self.selected < len(m.entities)):
+            return
+        self.hist.push(m.copy_state())
+        del m.entities[self.selected]
+        self.selected = None
+        self._drag = None
+        self._prop_sig = None
+        self.project.dirty['maps'] = True
+        self.refresh()
 
 
 def QPixmap_from(image):
@@ -702,6 +1088,8 @@ class MusicTab(QWidget):
         self.project = None
         self.player = AudioPlayer()
         self._load_lock = False
+        self._hist_lock = False
+        self.hist = Hist()
         root = QHBoxLayout(self)
         left = QVBoxLayout()
         self.songs = QListWidget()
@@ -743,6 +1131,7 @@ class MusicTab(QWidget):
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(['音符', '时值'])
         self.table.itemChanged.connect(self._item)
+        self.table.currentCellChanged.connect(self._cell_entered)
         right.addWidget(self.table, 1)
         keys = QHBoxLayout()
         self.octave = QSpinBox()
@@ -779,16 +1168,54 @@ class MusicTab(QWidget):
         right.addWidget(self.length_label)
         right.addWidget(QLabel('时值用 1 2 4 8 16 32，附点写成 8. ，或 t12 表示 12 帧。噪声用 N0–N15。'))
         root.addLayout(right, 1)
+        self._focus_push = _FocusPush(self._push)
+        for widget in (self.tempo, self.duty, self.vol, self.once):
+            widget.installEventFilter(self._focus_push)
 
-    def load(self, project):
+    def load(self, project, reset_hist=True):
         self.project = project
+        if reset_hist:
+            self.hist = Hist()
+        self._hist_lock = True
+        self.songs.blockSignals(True)
         self.songs.clear()
         for s in project.songs:
             self.songs.addItem(s.name)
+        self.songs.blockSignals(False)
+        self._hist_lock = False
         if project.songs:
             self.songs.setCurrentRow(0)
         else:
             self.reload_table()
+
+    def _snapshot(self):
+        return ([s.clone() for s in self.project.songs], self.songs.currentRow())
+
+    def _push(self):
+        if self._load_lock or self._hist_lock or not self.project:
+            return
+        self.hist.push(self._snapshot())
+
+    def _apply_snapshot(self, state):
+        songs, row = state
+        self._hist_lock = True
+        self.project.songs = [s.clone() for s in songs]
+        self.project.dirty['songs'] = True
+        self.songs.blockSignals(True)
+        self.songs.clear()
+        for s in self.project.songs:
+            self.songs.addItem(s.name)
+        self.songs.blockSignals(False)
+        if self.songs.count():
+            self.songs.setCurrentRow(max(0, min(row, self.songs.count() - 1)))
+        self.reload_table()
+        self._hist_lock = False
+        self.window.touch()
+
+    def _cell_entered(self, row, _col, prev_row, _prev_col):
+        if self._load_lock or self._hist_lock or row < 0 or row == prev_row:
+            return
+        self._push()
 
     def song(self):
         if not self.project or self.songs.currentRow() < 0:
@@ -911,6 +1338,9 @@ class MusicTab(QWidget):
         self._lengths(self.song())
 
     def _type_note(self, name):
+        if not self.song():
+            return
+        self._push()
         ch = self.channel()
         if not ch:
             return
@@ -919,21 +1349,30 @@ class MusicTab(QWidget):
         elif name not in ('R',) and self.chan.currentIndex() != 3:
             name = name + str(self.octave.value())
         row = self.table.currentRow()
-        if row < 0:
-            self.add_row()
-            row = self.table.rowCount() - 1
+        if row < 0 or row >= len(ch.events):
+            self._append_event()
+            row = len(ch.events) - 1
         note, dur = ch.events[row]
         ch.events[row] = (name, dur)
+        self._hist_lock = True
         self.reload_table()
         self.table.setCurrentCell(row, 0)
+        self._hist_lock = False
         self._touch()
 
+    def _append_event(self):
+        ch = self.channel()
+        token = 'N1' if self.chan.currentIndex() == 3 else 'C4'
+        ch.events.append((token, '8'))
+
     def add_row(self):
+        if not self.song():
+            return
+        self._push()
         ch = self.channel()
         if not ch:
             return
-        token = 'N1' if self.chan.currentIndex() == 3 else 'C4'
-        ch.events.append((token, '8'))
+        self._append_event()
         self.reload_table()
         self._touch()
 
@@ -942,6 +1381,7 @@ class MusicTab(QWidget):
         row = self.table.currentRow()
         if not ch or row < 0 or row >= len(ch.events):
             return
+        self._push()
         del ch.events[row]
         if ch.loop_at is not None and ch.loop_at > row:
             ch.loop_at -= 1
@@ -953,6 +1393,7 @@ class MusicTab(QWidget):
         row = self.table.currentRow()
         if not ch or row < 0:
             return
+        self._push()
         ch.loop_at = row
         self.reload_table()
         self._touch()
@@ -961,6 +1402,7 @@ class MusicTab(QWidget):
         ch = self.channel()
         if not ch:
             return
+        self._push()
         ch.loop_at = None
         self.reload_table()
         self._touch()
@@ -989,6 +1431,7 @@ class MusicTab(QWidget):
         name, ok = QInputDialog.getText(self, '新建歌曲', '歌曲名（字母数字）：')
         if not ok or not name.strip():
             return
+        self._push()
         song = data.Song(name.strip())
         ch = data.Channel()
         ch.events = [('C4', '4'), ('E4', '4'), ('G4', '4'), ('C5', '4')]
@@ -1002,8 +1445,9 @@ class MusicTab(QWidget):
         row = self.songs.currentRow()
         if not self.project or row < 0:
             return
+        self._push()
         del self.project.songs[row]
-        self.load(self.project)
+        self.load(self.project, reset_hist=False)
         self._touch()
 
     def import_fms(self):
@@ -1028,18 +1472,38 @@ class MusicTab(QWidget):
         if not songs:
             QMessageBox.warning(self, '导入', '文件里没有曲子。\n' + proc.stderr)
             return
+        self._push()
         self.project.songs.extend(songs)
-        self.load(self.project)
+        self.load(self.project, reset_hist=False)
         self.songs.setCurrentRow(len(self.project.songs) - 1)
         self._touch()
         if proc.stderr.strip():
             QMessageBox.information(self, '导入', '已加入 %d 首。这些内容被忽略：\n%s' % (len(songs), proc.stderr.strip()))
 
     def undo(self):
-        pass
+        if not self.project:
+            return
+        prev = self.hist.undo(self._snapshot())
+        if prev is not None:
+            self._apply_snapshot(prev)
 
     def redo(self):
-        pass
+        if not self.project:
+            return
+        nxt = self.hist.redo(self._snapshot())
+        if nxt is not None:
+            self._apply_snapshot(nxt)
+
+
+class _FocusPush(QObject):
+    def __init__(self, push):
+        QObject.__init__(self)
+        self._push = push
+
+    def eventFilter(self, _obj, event):
+        if event.type() == QEvent.Type.FocusIn:
+            self._push()
+        return False
 
 
 class AudioPlayer(object):
@@ -1120,7 +1584,7 @@ class PreviewTab(QWidget):
         sc = QScrollArea()
         sc.setWidget(self.view)
         lay.addWidget(sc, 1)
-        lay.addWidget(QLabel('这里按 NES 的 16×16 属性块上色，色 0 用共用背景色，和游戏画面一致。'))
+        lay.addWidget(QLabel('这里按 NES 的 16×16 属性块上色，色 0 用共用背景色。实体用精灵图叠在上面。'))
 
     def load(self, project):
         self.which.blockSignals(True)
@@ -1273,6 +1737,329 @@ class BuildTab(QWidget):
         box.setWindowTitle('依赖')
         box.setText(text)
         box.exec()
+
+
+def _copy_entity_spec(spec):
+    out = data.ent2c.EntitySet()
+    out.limit = spec.limit
+    for src in spec.types:
+        ent = data.ent2c.EntityType(src.name, src.id, src.w, src.h, src.pal)
+        ent.label = src.label
+        ent.sprites = list(src.sprites)
+        ent.props = list(src.props)
+        ent.orig_name = src.name
+        ent.orig_props = list(src.props)
+        out.types.append(ent)
+    return out
+
+
+class EntityTypeDialog(QDialog):
+    """Edit games/<game>/entities.txt: names, sprites, and numeric properties."""
+
+    def __init__(self, project, parent=None):
+        QDialog.__init__(self, parent)
+        self.project = project
+        self.spec = _copy_entity_spec(project.entity_spec)
+        self.cur = None
+        self._lock = False
+        self.setWindowTitle('实体类型')
+        self.resize(720, 520)
+        root = QVBoxLayout(self)
+        limit_row = QHBoxLayout()
+        limit_row.addWidget(QLabel('每张地图最多'))
+        self.limit = QSpinBox()
+        self.limit.setRange(1, data.ent2c.ENT_ABS_MAX)
+        self.limit.setValue(self.spec.limit)
+        self.limit.valueChanged.connect(self._limit)
+        limit_row.addWidget(self.limit)
+        limit_row.addWidget(QLabel('个（不能超过 32）'))
+        limit_row.addStretch(1)
+        root.addLayout(limit_row)
+        body = QHBoxLayout()
+        left = QVBoxLayout()
+        self.type_list = QListWidget()
+        self.type_list.currentRowChanged.connect(self._switch)
+        left.addWidget(self.type_list, 1)
+        add = QPushButton('添加类型')
+        add.clicked.connect(self._add_type)
+        left.addWidget(add)
+        remove = QPushButton('删除类型')
+        remove.clicked.connect(self._del_type)
+        left.addWidget(remove)
+        body.addLayout(left, 0)
+        right = QVBoxLayout()
+        form = QFormLayout()
+        self.name = QLineEdit()
+        self.label = QLineEdit()
+        self.ident = QSpinBox()
+        self.ident.setRange(1, 255)
+        self.w = QSpinBox()
+        self.w.setRange(1, 64)
+        self.h = QSpinBox()
+        self.h.setRange(1, 64)
+        self.pal = QSpinBox()
+        self.pal.setRange(0, 3)
+        form.addRow('名字（C 标识符）', self.name)
+        form.addRow('显示名', self.label)
+        form.addRow('编号', self.ident)
+        form.addRow('宽', self.w)
+        form.addRow('高', self.h)
+        form.addRow('精灵调色板', self.pal)
+        right.addLayout(form)
+        right.addWidget(QLabel('图块：相对坐标和 tiles.png 里的编号。颜色 0 透明。'))
+        self.sprites = QTableWidget(0, 3)
+        self.sprites.setHorizontalHeaderLabels(['dx', 'dy', '图块'])
+        right.addWidget(self.sprites, 1)
+        sbtns = QHBoxLayout()
+        add_s = QPushButton('添加图块')
+        add_s.clicked.connect(self._add_sprite)
+        del_s = QPushButton('删除图块')
+        del_s.clicked.connect(self._del_sprite)
+        sbtns.addWidget(add_s)
+        sbtns.addWidget(del_s)
+        right.addLayout(sbtns)
+        right.addWidget(QLabel('属性：最多 4 个，0–65535。放进地图后可以逐个改。'))
+        self.props = QTableWidget(0, 2)
+        self.props.setHorizontalHeaderLabels(['名字', '默认值'])
+        right.addWidget(self.props, 1)
+        pbtns = QHBoxLayout()
+        add_p = QPushButton('添加属性')
+        add_p.clicked.connect(self._add_prop)
+        del_p = QPushButton('删除属性')
+        del_p.clicked.connect(self._del_prop)
+        pbtns.addWidget(add_p)
+        pbtns.addWidget(del_p)
+        right.addLayout(pbtns)
+        body.addLayout(right, 1)
+        root.addLayout(body, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+        self._reload_list(self.spec.types[0].name if self.spec.types else None)
+
+    def _limit(self, value):
+        self.spec.limit = value
+
+    def _switch(self, row):
+        if self._lock:
+            return
+        self._store()
+        self.cur = self.spec.types[row] if 0 <= row < len(self.spec.types) else None
+        self._load_type()
+
+    def _reload_list(self, select_name):
+        self._lock = True
+        self.type_list.clear()
+        pick = 0
+        for i, ent in enumerate(self.spec.types):
+            self.type_list.addItem('%s  (%s)' % ((ent.label or ent.name), ent.name))
+            if ent.name == select_name:
+                pick = i
+        if self.spec.types:
+            self.type_list.setCurrentRow(pick)
+            self.cur = self.spec.types[pick]
+        else:
+            self.cur = None
+        self._lock = False
+        self._load_type()
+
+    def _load_type(self):
+        self._lock = True
+        ent = self.cur
+        enabled = ent is not None
+        for widget in (self.name, self.label, self.ident, self.w, self.h, self.pal, self.sprites, self.props):
+            widget.setEnabled(enabled)
+        self.sprites.setRowCount(0)
+        self.props.setRowCount(0)
+        if ent is None:
+            self._lock = False
+            return
+        self.name.setText(ent.name)
+        self.label.setText(ent.label)
+        self.ident.setValue(ent.id)
+        self.w.setValue(ent.w)
+        self.h.setValue(ent.h)
+        self.pal.setValue(ent.pal)
+        self.sprites.setRowCount(len(ent.sprites))
+        for i, (dx, dy, tile) in enumerate(ent.sprites):
+            self.sprites.setItem(i, 0, QTableWidgetItem(str(dx)))
+            self.sprites.setItem(i, 1, QTableWidgetItem(str(dy)))
+            self.sprites.setItem(i, 2, QTableWidgetItem('0x%02X' % tile))
+        self.props.setRowCount(len(ent.props))
+        for i, (name, default) in enumerate(ent.props):
+            self.props.setItem(i, 0, QTableWidgetItem(name))
+            self.props.setItem(i, 1, QTableWidgetItem(str(default)))
+        self._lock = False
+
+    def _cell(self, table, row, col):
+        item = table.item(row, col)
+        return '' if item is None else item.text().strip()
+
+    def _store(self):
+        ent = self.cur
+        if ent is None or self._lock:
+            return True
+        ent.name = self.name.text().strip()
+        ent.label = self.label.text().strip()
+        ent.id = self.ident.value()
+        ent.w = self.w.value()
+        ent.h = self.h.value()
+        ent.pal = self.pal.value()
+        sprites = []
+        for row in range(self.sprites.rowCount()):
+            try:
+                sprites.append((int(self._cell(self.sprites, row, 0), 0),
+                                int(self._cell(self.sprites, row, 1), 0),
+                                int(self._cell(self.sprites, row, 2), 0) & 255))
+            except ValueError:
+                QMessageBox.warning(self, '实体类型', '图块第 %d 行不是数字。' % (row + 1))
+                return False
+        props = []
+        seen = set()
+        for row in range(self.props.rowCount()):
+            name = self._cell(self.props, row, 0)
+            if not name or any(c.isspace() for c in name):
+                QMessageBox.warning(self, '实体类型', '属性第 %d 行没有名字。' % (row + 1))
+                return False
+            if name in seen:
+                QMessageBox.warning(self, '实体类型', '属性 %s 重复。' % name)
+                return False
+            seen.add(name)
+            try:
+                props.append((name, int(self._cell(self.props, row, 1) or '0', 0) & 65535))
+            except ValueError:
+                QMessageBox.warning(self, '实体类型', '属性 %s 的默认值不是数字。' % name)
+                return False
+        if len(props) > data.ent2c.MAX_PROPS:
+            QMessageBox.warning(self, '实体类型', '每个类型最多 %d 个属性。' % data.ent2c.MAX_PROPS)
+            return False
+        ent.sprites = sprites
+        ent.props = props
+        return True
+
+    def _add_type(self):
+        if not self._store():
+            return
+        names = set(t.name for t in self.spec.types)
+        ids = set(t.id for t in self.spec.types)
+        n = 1
+        name = 'item'
+        while name in names:
+            n += 1
+            name = 'item%d' % n
+        ident = 1
+        while ident in ids:
+            ident += 1
+        if ident > 255:
+            QMessageBox.warning(self, '实体类型', '编号已经用完（1–255）。')
+            return
+        ent = data.ent2c.EntityType(name, ident, 8, 8, 0)
+        ent.label = '新实体'
+        ent.sprites = [(0, 0, 0x20)]
+        ent.props = []
+        ent.orig_name = None
+        ent.orig_props = []
+        self.spec.types.append(ent)
+        self._reload_list(name)
+
+    def _del_type(self):
+        if self.cur is None:
+            return
+        self.spec.types.remove(self.cur)
+        self.cur = None
+        self._reload_list(self.spec.types[0].name if self.spec.types else None)
+
+    def _add_sprite(self):
+        if self.cur is None or not self._store():
+            return
+        self.cur.sprites.append((0, 0, 0x20))
+        self._load_type()
+
+    def _del_sprite(self):
+        if self.cur is None or not self._store():
+            return
+        row = self.sprites.currentRow()
+        if row < 0 and self.cur.sprites:
+            row = len(self.cur.sprites) - 1
+        if row < 0:
+            return
+        del self.cur.sprites[row]
+        self._load_type()
+
+    def _add_prop(self):
+        if self.cur is None or not self._store():
+            return
+        if len(self.cur.props) >= data.ent2c.MAX_PROPS:
+            QMessageBox.warning(self, '实体类型', '每个类型最多 %d 个属性。' % data.ent2c.MAX_PROPS)
+            return
+        names = set(p[0] for p in self.cur.props)
+        n = 1
+        name = 'value'
+        while name in names:
+            n += 1
+            name = 'value%d' % n
+        self.cur.props.append((name, 0))
+        self._load_type()
+
+    def _del_prop(self):
+        if self.cur is None or not self._store():
+            return
+        row = self.props.currentRow()
+        if row < 0 and self.cur.props:
+            row = len(self.cur.props) - 1
+        if row < 0:
+            return
+        del self.cur.props[row]
+        self._load_type()
+
+    def _accept(self):
+        if not self._store():
+            return
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix='.txt')
+        os.close(fd)
+        try:
+            data.ent2c.save_types(path, self.spec)
+            try:
+                loaded = data.ent2c.load_types(path)
+            except SystemExit as exc:
+                QMessageBox.warning(self, '实体类型', str(exc))
+                return
+        finally:
+            os.remove(path)
+        for game_map in self.project.maps:
+            if len(game_map.entities) > self.spec.limit:
+                QMessageBox.warning(
+                    self, '实体类型',
+                    '地图 %s 有 %d 个实体，新的上限是 %d。先删掉一些再改上限。' % (
+                        game_map.name, len(game_map.entities), self.spec.limit))
+                return
+            for ent in game_map.entities:
+                if not any(ent.type in (t.orig_name, t.name) for t in self.spec.types):
+                    QMessageBox.warning(
+                        self, '实体类型',
+                        '地图 %s 还在用类型 %s。先从地图上删掉，或不要删这种类型。' % (game_map.name, ent.type))
+                    return
+        for src in self.spec.types:
+            if not src.orig_name:
+                continue
+            for game_map in self.project.maps:
+                for ent in game_map.entities:
+                    if ent.type != src.orig_name:
+                        continue
+                    mapped = {}
+                    for i, (name, default) in enumerate(src.props):
+                        if i < len(src.orig_props) and src.orig_props[i][0] in ent.props:
+                            mapped[name] = ent.props[src.orig_props[i][0]]
+                        else:
+                            mapped[name] = ent.props.get(name, default)
+                    ent.props = mapped
+                    ent.type = src.name
+        self.project.entity_spec = loaded
+        self.project.dirty['entities'] = True
+        self.project.dirty['maps'] = True
+        self.accept()
 
 
 class NewDialog(QDialog):

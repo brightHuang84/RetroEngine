@@ -1,0 +1,13 @@
+# 实体类型。一张地图最多 limit 个（不能超过 32）。
+limit 32
+
+type paddle id=1 w=32 h=8 pal=1
+  label 挡板
+  sprite 0 0 0x91
+  sprite 8 0 0x92
+  sprite 16 0 0x92
+  sprite 24 0 0x93
+
+type ball id=2 w=8 h=8 pal=0
+  label 球
+  sprite 0 0 0x90

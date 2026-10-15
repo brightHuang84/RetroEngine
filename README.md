@@ -11,7 +11,7 @@ flowchart TD
     BG[breakout/game.c]:::g
     PF[platformer/game.c]:::g
   end
-  games --> E[engine/engine.c<br>背景/属性/文字, 精灵/metasprite, 输入边沿,<br>场景, 四通道乐曲+音效, 定点数/AABB/地图碰撞]
+  games --> E[engine/engine.c<br>背景/属性/文字, 精灵/metasprite, 输入边沿,<br>场景, 四通道乐曲+音效, 定点数/AABB/地图碰撞, 实体表]
   E -->|engine/backend.h| RS[render/render_soft.c<br>模拟 NES PPU：2 张 nametable, 属性, 64 精灵, 翻转, 滚动]
   E -->|engine/backend.h| RN[render/render_nes.c<br>VRAM 更新队列 → NMI/vblank, OAM DMA, APU 四通道]
   E -->|engine/backend.h| RG[render/render_gba.c<br>mode 0 4bpp, BG+OBJ, HBlank 分屏, DMG 四通道]
@@ -19,7 +19,7 @@ flowchart TD
   RS --> UEFI[platform/uefi<br>GOP 缩放居中, SimpleTextInput, Stall, PC 喇叭]
   RN --> NES[platform/nes<br>crt0.s, nes.cfg, 手柄]
   RG --> GBA[platform/gba<br>crt0.s, gba.ld, 手柄, vblank]
-  A[games/&lt;name&gt;/tiles.png + *.txt/*.csv 地图 + palette.txt] --> T[tools/build_assets.py<br>png2chr.py + png2gba.py + map2c.py]
+  A[games/&lt;name&gt;/tiles.png + *.txt/*.csv 地图 + palette.txt + entities.txt] --> T[tools/build_assets.py<br>png2chr.py + png2gba.py + map2c.py + ent2c.py]
   T --> CHR[game.chr → NES]
   T --> CA[tiles.c / tiles_gba.c / maps.c / palette.c / assets.h → 各平台]
   S[games/&lt;name&gt;/songs.txt<br>以及 music/*.fms.txt] --> FM[tools/fms2mus.py]
@@ -33,9 +33,9 @@ flowchart TD
 engine/   engine.h（公开 API） backend.h（后端接口） engine.c
 render/   render_soft.c/.h（PC 和 UEFI 共用） render_nes.c  render_gba.c
 platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,nes.cfg,nes.h}  gba/{main_gba.c,crt0.s,gba.ld,gba.h}
-games/    breakout/{game.c,tiles.png,palette.txt,play.txt,songs.txt,music/*.fms.txt,fami/*.fms.txt}  platformer/ 同样
-editor/   桌面编辑器（图块、调色板、地图、音乐、编译运行）。见 editor/README.md
-tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py txt2mus.py fms2mus.py songs2fms.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua qemu_test.sh
+games/    breakout/{game.c,tiles.png,palette.txt,play.txt,entities.txt,songs.txt,music/*.fms.txt,fami/*.fms.txt}  platformer/ 同样
+editor/   桌面编辑器（图块、调色板、地图、实体、音乐、编译运行）。见 editor/README.md
+tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py ent2c.py txt2mus.py fms2mus.py songs2fms.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua qemu_test.sh
 lib/      none.lib（cc65 运行库副本，用于离线编译）
 build/<game>/{pc,uefi,nes,gba,gen}/   编译输出
 shots/    测试截图
@@ -47,7 +47,7 @@ shots/    测试截图
 | 屏幕 | 256x240；背景 64x30 tile（两屏宽），支持水平滚动 0..511 |
 | 颜色 | 4 组背景调色板 + 4 组精灵调色板，每组 3 色 + 公共背景色；背景调色板按 16x16 区块设置 |
 | 精灵 | 8x8，每帧最多 64 个；NES 上**同一扫描线最多 8 个**，超出的会消失 |
-| RAM | 2KB：$0200 是 OAM，$0300 是 VRAM 队列，$0700 是 C 栈；游戏和引擎变量放在 $0400-$06FF（breakout 的 BSS 是 333 字节，platformer 是 264 字节，含大约 40 字节乐曲状态） |
+| RAM | 2KB：$0200 是 OAM，$0300 是 VRAM 队列，$0700 是 C 栈；游戏和引擎变量放在 $0400-$06FF（breakout 的 BSS 是 338 字节，platformer 是 303 字节，含大约 40 字节乐曲状态。实体坐标在 ROM 里，不占这块） |
 | 音频 | 4 通道：两路方波、三角波、噪声；没有 DPCM。音效占用 pulse2 |
 | VRAM 写入 | 每帧大约 96 字节，超出时引擎会等一帧（掉一帧）；在场景 `init` 里写入不受限制（此时渲染已关闭） |
 | ROM | NROM：32KB PRG + 8KB CHR（256 个 tile，背景和精灵共用） |
@@ -76,6 +76,8 @@ shots/    测试截图
 **音频**：四个通道同时出声（方波、方波、三角波、噪声）。`music_play` / `music_stop` / `music_pause` / `music_volume` 播循环乐曲，`sfx(SFX_BLIP|HIT|COIN|JUMP|LOSE|WIN)` 暂时占用第二路方波，结束后那一路乐曲继续。详见下面的「音频」。
 
 **物理**：`aabb(ax,ay,aw,ah,bx,by,bw,bh)`，`tm_bind(map,w,h,flags)`，`tm_flags_at(px,py)`（返回 `TF_SOLID`，地图左右和上方之外都算实心），`rnd()`。全局变量 `frame_count`。
+
+**实体**：`entities.txt` 定义类型，地图末尾的 `entities:` 放实例。生成的表每条 12 字节（类型、x 低/高、y、4 个小端 u16 属性），一张图最多 32 个。`ent_ptr`、`ent_type`、`ent_x`、`ent_y`、`ent_prop(p, n)` 读一条记录，`ent_find` 找第一种类型（找不到返回 255）。引擎不跑实体逻辑，每个游戏自己解释这些数。
 
 ## 音频
 
@@ -200,6 +202,7 @@ PC 上只听某一首、并且游戏里的 `music_play` 都改播它：`RETRO_MU
      ```
    - 或者用 Tiled 导出 CSV `level.csv`，再写一个配套的 `level.legend`（每行格式：`tile [pal=N] [solid]`）
    - 生成的代码包括 `map_level[]`、`map_level_attr[]`、`map_level_flags[]`，以及 `MAP_LEVEL_W/H`
+   - 可选：`entities.txt` 定义类型，地图末尾加 `entities:` 放实例。见下面的「实体」。
 4. 写 `songs.txt`，或者在 `music/` 里放 FamiStudio 文本导出（至少一首循环；`make` 会生成 `music.h`）。格式见上面的「音频」。
 5. 写 `game.c`：只 `#include "../../engine/engine.h"`、`"assets.h"` 和 `"music.h"`，实现场景、`game_boot()`、`game_autopilot()`。要背景音乐就在场景 `init` 里调用 `music_play(MUS_...)`。
 6. `make GAME=mygame pc`（以及 uefi、img、nes、gba、all）
@@ -215,13 +218,29 @@ PC 上只听某一首、并且游戏里的 `music_play` 都改播它：`RETRO_MU
 `tools/build_assets.py games/<g> build/<g>/gen` 会生成：
 - `game.chr`：8KB 的 NES 图案表（ca65 通过 `.incbin` 引入）
 - `tiles.c`：`chr_tiles[4096]`，内容和 CHR 一样，给软件渲染器用
-- `maps.c` 和 `assets.h`：地图、属性表、碰撞标志，以及 `game_palette` 的声明
+- `maps.c` 和 `assets.h`：地图、属性表、碰撞标志、实体表，以及 `game_palette` 的声明
 - `palette.c`：`game_palette[32]`，从 `palette.txt` 来
 - `tiles_gba.c`：`gba_tiles[8192]`，同一张图的 GBA 4bpp（每 tile 32 字节，低 nibble 是左边的像素）
 
 所以每个游戏只有一份图形源（`tiles.png`）、一份调色板（`palette.txt`）和一份地图源，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会把 `songs.txt` 和 `music/*.fms.txt` 编成 `music.c`。
 
 地图文本可以在 `map:` 后面加可选的 `palmap:`，每格一位数字（0–3）。没有这一段时，调色板仍按 legend 里图块的 `pal=` 来，和以前的文件完全一样。同一 16×16 里如果出现两种非 0 调色板，采用先遇到的那个。
+
+再往后可以加 `entities:`。每一行是 `类型 x y 属性=数字`。类型写在 `games/<名字>/entities.txt`：
+
+```
+limit 32
+type coin id=2 w=8 h=8 pal=1
+  label 硬币
+  sprite 0 0 0xB0
+type enemy id=3 w=8 h=8 pal=2
+  label 敌人
+  sprite 0 0 0xB8
+  prop left 0
+  prop right 64
+```
+
+`sprite` 是编辑器和预览用的显示（相对坐标、图块、精灵调色板 0–3，颜色 0 透明）。`prop` 最多 4 个，生成进那条记录的 u16 字段。`limit` 是每张地图的上限，不能超过 32。超过上限、未知类型、未知属性，`ent2c.py` 会直接报错停掉。没有 `entities.txt` 的游戏不生成这些表。空的 `entities:` 会生成长度为 0 的计数和一个占位字节。
 
 ## 在 Ubuntu 26.04 上安装和编译
 ```sh
@@ -267,9 +286,9 @@ python3 editor/retro_editor.py
 
 1. **图块**：画 `tiles.png` 里的 8×8 图块（4 色），可缩放、复制、翻转、撤销。
 2. **调色板**：从 NES 的 64 色里点选 32 个颜色，存进 `palette.txt`。
-3. **地图**：用真彩色涂格子，选图块和调色板，标实心。16×16 的属性块会画出来；勾上「统一 16×16 调色板」时，涂一格会把那一块的调色板改成同一个。黄线是屏幕分界。
-4. **音乐**：按通道改音符、速度、占空比、音量、循环，在编辑器里试听，也可以导入 FamiStudio 文本。保存进 `songs.txt`。
-5. **预览**：按游戏的上色方式看当前地图。
+3. **地图**：用真彩色涂格子，选图块和调色板，标实心。16×16 的属性块会画出来；勾上「统一 16×16 调色板」时，涂一格会把那一块的调色板改成同一个。黄线是屏幕分界。图层可以切到「实体」：左边是类型（用真实精灵画），左键放置，拖动移动，右键或 Delete 删除，下面改坐标和属性。默认吸附 8 像素，取消勾选就是 1 像素。「编辑类型」改 `entities.txt`。预览里也能看到这些精灵。
+4. **音乐**：按通道改音符、速度、占空比、音量、循环，在编辑器里试听，也可以导入 FamiStudio 文本。保存进 `songs.txt`。撤销和重做包括改音符、加行、删行、循环、速度和新建/删除曲子。
+5. **预览**：按游戏的上色方式看当前地图，实体叠在上面。
 6. **代码**：编辑 `game.c`（逻辑仍然是 C）。
 7. **编译**：PC / UEFI / NES / GBA。日志里会提示缺哪个 apt 包。「检查依赖」列出还要装什么。运行按钮会启动 PC 程序、fceux、mGBA 或 QEMU。
 
@@ -344,4 +363,5 @@ make UEFI_LIBDIRS=/path/to/lib UEFI_INCDIR=/path/to/include/efi GAME=breakout ue
 - 修改背景 tile 不会自动更新碰撞地图（`tm_bind` 绑定的是 ROM 里的地图）。
 - 只支持水平滚动，最多两屏（512 像素）。GBA 以外的平台没有画面分割，所以滚动场景的 HUD 要用精灵来画。GBA 额外把地图最上面两行钉在屏幕顶部，见上面的「GBA 画面」。
 - GBA 不写入任天堂 Logo，真机原装 BIOS 会停在启动画面；模拟器和烧录卡上自带的 BIOS 替换一般能过。噪声音高是近似值。L/R 未使用。
-- 编辑器第一版不摆放金币、敌人这类对象，它们仍写在 `game.c` 里。地图的调色板按图块记在 legend 里；同一图块要在不同格子用不同调色板时，才写出 `palmap:`。试听用的合成器和 SDL 那一版一致，不是 NES APU 的逐周期模拟。
+- 实体表只负责摆放和属性。Platformer 读玩家起点、全部硬币，以及**第一只**敌人的 `left`/`right` 巡逻范围；多放的敌人会进表，但游戏不会动它们。Breakout 的挡板位置来自 `paddle`，球的待机位置是相对挡板的有符号 8 位偏移（默认 +12, −8）。标题画面上的装饰精灵仍写在 `game.c` 里。y 只到 255。一张图最多 32 个实体、每种类型最多 4 个属性。
+- 地图的调色板按图块记在 legend 里；同一图块要在不同格子用不同调色板时，才写出 `palmap:`。试听用的合成器和 SDL 那一版一致，不是 NES APU 的逐周期模拟。音乐撤销覆盖音符、行、循环、速度和曲目列表，不记录试听播放本身。

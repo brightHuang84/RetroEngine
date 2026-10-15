@@ -14,6 +14,7 @@ TOOLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if TOOLS not in sys.path:
     sys.path.insert(0, TOOLS)
 import txt2mus
+import ent2c
 
 GREY = (0, 85, 170, 255)
 # Same table as render/render_soft.c. Index is the NES color 0..63.
@@ -141,6 +142,7 @@ class GameMap(object):
         self.legend = []
         self.rows = []
         self.override = None  # None, or h rows of w ints/None
+        self.entities = []
         self.original = ''
 
     def copy_state(self):
@@ -148,13 +150,14 @@ class GameMap(object):
         if self.override is not None:
             ov = [row[:] for row in self.override]
         legs = [(e.char, e.tile, e.pal, e.solid) for e in self.legend]
-        return (tuple(self.rows), tuple(legs), ov)
+        return (tuple(self.rows), tuple(legs), ov, tuple(e.copy() for e in self.entities))
 
     def restore_state(self, state):
-        rows, legs, ov = state
+        rows, legs, ov, ents = state
         self.rows = list(rows)
         self.legend = [LegendEntry(c, t, p, s) for c, t, p, s in legs]
         self.override = [row[:] for row in ov] if ov is not None else None
+        self.entities = [e.copy() for e in ents]
 
     @property
     def w(self):
@@ -270,7 +273,7 @@ class GameMap(object):
         else:
             self.place(x, y, tile, pal)
 
-    def emit(self):
+    def emit(self, spec=None):
         lines = ['legend:']
         for e in self.legend:
             line = '%s 0x%02X pal=%d' % (e.char, e.tile, e.pal)
@@ -283,7 +286,11 @@ class GameMap(object):
             lines.append('palmap:')
             for y in range(self.h):
                 lines.append(''.join(str(self.effective_pal(x, y)) for x in range(self.w)))
-        return '\n'.join(lines) + '\n'
+        text = '\n'.join(lines) + '\n'
+        extra = ent2c.format_entities(self.entities, spec)
+        if extra:
+            text += extra
+        return text
 
 
 def load_map(path):
@@ -294,7 +301,7 @@ def load_map(path):
     legend = {}
     for line in gm.original.splitlines():
         raw = line.rstrip('\n')
-        if raw.strip() in ('legend:', 'map:', 'palmap:'):
+        if raw.strip() in ('legend:', 'map:', 'palmap:', 'entities:'):
             mode = raw.strip()
             continue
         if mode == 'legend:' and raw.strip() and not raw.startswith(';'):
@@ -324,6 +331,7 @@ def load_map(path):
         for ch in row:
             if ch not in legend:
                 raise ValueError('%s: character %r is not in the legend' % (path, ch))
+    gm.entities = ent2c.entities_from_map_text(gm.original, path)
     return gm
 
 
@@ -332,7 +340,7 @@ def list_maps(game_dir):
     for fn in sorted(os.listdir(game_dir)):
         if not fn.endswith('.txt'):
             continue
-        if fn.lower() in ('songs.txt', 'palette.txt'):
+        if fn.lower() in ('songs.txt', 'palette.txt', 'entities.txt'):
             continue
         path = os.path.join(game_dir, fn)
         text = open(path).read()
@@ -558,7 +566,12 @@ class Project(object):
         self.songs_text = open(self.songs_path).read() if os.path.exists(self.songs_path) else ''
         self.songs = parse_songs(self.songs_text) if self.songs_text else []
         self.code = open(self.code_path).read() if os.path.exists(self.code_path) else ''
-        self.dirty = {'palette': False, 'tiles': False, 'maps': False, 'songs': False, 'code': False}
+        self.entities_path = os.path.join(self.root, 'entities.txt')
+        self.entity_spec = ent2c.load_types(self.entities_path)
+        self.dirty = {
+            'palette': False, 'tiles': False, 'maps': False,
+            'songs': False, 'code': False, 'entities': False,
+        }
 
     def map_by_name(self, name):
         for m in self.maps:
@@ -573,9 +586,12 @@ class Project(object):
         if self.dirty['tiles']:
             save_tiles(self.tiles_path, self.tiles)
             self.dirty['tiles'] = False
+        if self.dirty['entities']:
+            ent2c.save_types(self.entities_path, self.entity_spec)
+            self.dirty['entities'] = False
         if self.dirty['maps']:
             for m in self.maps:
-                text = m.emit()
+                text = m.emit(self.entity_spec)
                 # Unedited maps keep their original bytes when the canonical
                 # form would only reshuffle whitespace. Compare via map2c in tests;
                 # here, write canonical text once the map has been touched.

@@ -17,6 +17,7 @@ import re_synth
 import re_build
 import map2c
 import txt2mus
+import ent2c
 
 BREAKOUT_PAL = [
     0x0F, 0x16, 0x26, 0x06, 0x0F, 0x27, 0x37, 0x17, 0x0F, 0x2A, 0x3A, 0x1A, 0x0F, 0x10, 0x00, 0x30,
@@ -188,6 +189,49 @@ class RoundTrip(unittest.TestCase):
         samples = re_synth.render_sfx(1)
         self.assertGreater(len(samples), 1000)
         self.assertGreater(int(abs(samples).max()), 1000)
+
+    def test_entities_roundtrip_and_pack(self):
+        for game, expect in (
+            ('platformer', [('player', 16, 192), ('coin', 56, 196), ('enemy', 280, 200)]),
+            ('breakout', [('paddle', 112, 200), ('ball', 124, 192)]),
+        ):
+            spec = ent2c.load_types('games/%s/entities.txt' % game)
+            self.assertGreater(len(spec.types), 0)
+            self.assertLessEqual(spec.limit, ent2c.ENT_ABS_MAX)
+            gm = re_data.load_map('games/%s/%s.txt' % (game, 'level' if game == 'platformer' else 'play'))
+            by_type = {}
+            for ent in gm.entities:
+                by_type.setdefault(ent.type, ent)
+            for name, x, y in expect:
+                self.assertEqual((by_type[name].x, by_type[name].y), (x, y))
+            text = gm.emit(spec)
+            again = ent2c.entities_from_map_text(text)
+            self.assertEqual([(e.type, e.x, e.y, e.props) for e in again],
+                             [(e.type, e.x, e.y, dict(spec.by_name(e.type).props, **e.props)) for e in gm.entities])
+            for ent in gm.entities:
+                self.assertEqual(len(ent2c.pack(ent, spec)), ent2c.ENT_BYTES)
+            state = gm.copy_state()
+            gm.entities.append(ent2c.Entity('coin' if game == 'platformer' else 'ball', 8, 8, {}))
+            gm.restore_state(state)
+            self.assertEqual(len(gm.entities), len(again))
+
+    def test_entity_limit_is_an_error(self):
+        spec = ent2c.load_types('games/breakout/entities.txt')
+        spec.limit = 1
+        too_many = [ent2c.Entity('ball', 1, 1, {}), ent2c.Entity('ball', 2, 2, {})]
+        with self.assertRaises(SystemExit):
+            ent2c.check_count(too_many, spec, 'test')
+        with self.assertRaises(SystemExit):
+            ent2c.pack(ent2c.Entity('nope', 0, 0, {}), spec)
+        with self.assertRaises(SystemExit):
+            ent2c.parse_entity_line('ball 1 2 extra')
+
+    def test_generated_tables_match_the_maps(self):
+        for game in ('breakout', 'platformer'):
+            text = ent2c.emit_game('games/%s' % game)
+            self.assertIn('#define ENT_LIMIT', text)
+            self.assertIn('_ent[', text)
+            self.assertLessEqual(text.count('const unsigned char map_'), 8)
 
     def test_missing_tool_hint(self):
         tips = re_build.hints_for('pc: sdl2-config not found (install libsdl2-dev)')

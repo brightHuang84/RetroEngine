@@ -16,8 +16,8 @@
 static const s8 paddle_meta[] = { 0,0,0x91,1, 8,0,0x92,1, 16,0,0x92,1, 24,0,0x93,1, -128 };
 
 static u8 bricks[BR_ROWS][BR_COLS];
-static u8 padx, bx, by, serving, lives, left, won;
-static s8 vx, vy;
+static u8 padx, pad_y, bx, by, serving, lives, left, won;
+static s8 vx, vy, ball_dx, ball_dy;
 static u16 score;
 extern const Scene title_scene, play_scene, end_scene;
 
@@ -45,6 +45,24 @@ static void title_draw(void){ if(frame_count & 32) spr(124, 140, T_BALL, 0); }
 const Scene title_scene = { title_init, title_update, title_draw };
 
 /* ---------- play ---------- */
+static void load_starts(void){
+  u8 i; const u8 *e;
+  pad_y = PAD_Y;
+  padx = (u8)((SCREEN_W - PAD_W) / 2);
+  ball_dx = (s8)(PAD_W / 2 - 4);
+  ball_dy = -8;
+  for(i = 0; i < MAP_PLAY_ENT_N; i++){
+    e = ent_ptr(map_play_ent, i);
+    if(ent_type(e) == ENT_PADDLE){ padx = (u8)ent_x(e); pad_y = ent_y(e); }
+  }
+  for(i = 0; i < MAP_PLAY_ENT_N; i++){
+    e = ent_ptr(map_play_ent, i);
+    if(ent_type(e) == ENT_BALL){
+      ball_dx = (s8)((s16)ent_x(e) - (s16)padx);
+      ball_dy = (s8)((s16)ent_y(e) - (s16)pad_y);
+    }
+  }
+}
 static void serve(void){ serving = 1; vx = 0; vy = 0; bg_text(8, 16, "PRESS A TO LAUNCH"); }
 static void play_init(void){
   u8 r, c;
@@ -53,7 +71,8 @@ static void play_init(void){
   for(r = 0; r < BR_ROWS; r++) for(c = 0; c < BR_COLS; c++){
     bricks[r][c] = 1; draw_brick(r, c, 1); bg_attr((u8)(BR_TX + c * 2), (u8)(BR_TY + r), (u8)(r >> 1));
   }
-  left = BR_ROWS * BR_COLS; score = 0; lives = 3; padx = (SCREEN_W - PAD_W) / 2;
+  left = BR_ROWS * BR_COLS; score = 0; lives = 3;
+  load_starts();
   serve(); hud();
   music_play(MUS_PLAY);
 }
@@ -62,7 +81,7 @@ static void play_update(void){
   if((pad_held & BTN_LEFT) && padx > 10) padx -= 3;
   if((pad_held & BTN_RIGHT) && padx < 248 - PAD_W - 2) padx += 3;
   if(serving){
-    bx = (u8)(padx + PAD_W / 2 - 4); by = PAD_Y - 8;
+    bx = (u8)(padx + ball_dx); by = (u8)(pad_y + ball_dy);
     if(pad_pressed & (BTN_A | BTN_START)){ serving = 0; vx = (frame_count & 1) ? 1 : -1; vy = -2; bg_text(8, 16, "                 "); sfx(SFX_BLIP); }
     return;
   }
@@ -70,10 +89,10 @@ static void play_update(void){
   if(vx < 0 && bx < 8){ bx = 8; vx = -vx; sfx(SFX_BLIP); }
   if(vx > 0 && bx > 240){ bx = 240; vx = -vx; sfx(SFX_BLIP); }
   if(vy < 0 && by < 24){ by = 24; vy = -vy; sfx(SFX_BLIP); }
-  if(vy > 0 && aabb(bx, by, 8, 8, padx, PAD_Y, PAD_W, 6)){
+  if(vy > 0 && aabb(bx, by, 8, 8, padx, pad_y, PAD_W, 6)){
     off = (s8)((bx + 4) - (padx + PAD_W / 2));
     vx = (s8)(off / 6); if(vx == 0) vx = (off < 0) ? -1 : 1;
-    vy = -2; by = PAD_Y - 8; sfx(SFX_BLIP);
+    vy = -2; by = (u8)(pad_y + ball_dy); sfx(SFX_BLIP);
   }
   if(by >= 232 && vy > 0){
     sfx(SFX_LOSE);
@@ -93,7 +112,7 @@ static void play_update(void){
 }
 static void play_draw(void){
   spr(bx, by, T_BALL, 0);                 /* sprite 0 = ball (test scripts rely on it) */
-  spr_meta(padx, PAD_Y, paddle_meta, 0);  /* sprite 1 = paddle */
+  spr_meta(padx, pad_y, paddle_meta, 0);  /* sprite 1 = paddle */
 }
 const Scene play_scene = { play_init, play_update, play_draw };
 

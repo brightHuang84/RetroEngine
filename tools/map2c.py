@@ -29,7 +29,7 @@ def load(path):
     legend = {}; mode = None
     for line in open(path):
         line = line.rstrip('\n')
-        if line.strip() in ('legend:', 'map:', 'palmap:'): mode = line.strip(); continue
+        if line.strip() in ('legend:', 'map:', 'palmap:', 'entities:'): mode = line.strip(); continue
         if mode == 'legend:' and line.strip() and not line.startswith(';'):
             ch = line[0]; p = line[1:].split()
             t = int(p[0], 0); legend[ch] = t; pal[t], s = parse_opts(p[1:])
