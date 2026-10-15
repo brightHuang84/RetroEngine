@@ -2,11 +2,12 @@
    during vblank; OAM shadow at $0200 is DMA'd every NMI. */
 #include "../engine/backend.h"
 #include "../platform/nes/nes.h"
-static u8 direct;
+/* Non-static so platform/nes/upload.s can see it. */
+u8 ppu_direct;
 #define VRAM_BUDGET 96    /* ~15 CPU cycles per byte; vblank is ~2270 cycles incl. OAM DMA */
 static void put(u16 addr, const u8 *d, u8 n){
   u8 i;
-  if(direct){ PPUADDR = (u8)(addr >> 8); PPUADDR = (u8)addr; while(n--) PPUDATA = *d++; return; }
+  if(ppu_direct){ PPUADDR = (u8)(addr >> 8); PPUADDR = (u8)addr; while(n--) PPUDATA = *d++; return; }
   if(vram_len + 3 + n > VRAM_BUDGET) wait_vblank();   /* over budget: lag one frame */
   i = vram_len;
   vram_buf[i++] = (u8)(addr >> 8); vram_buf[i++] = (u8)addr; vram_buf[i++] = n;
@@ -18,10 +19,12 @@ void r_palette(const u8 *p){ put(0x3F00, p, 32); }
 void r_tiles(u8 x, u8 y, const u8 *t, u8 n){
   put((u16)((x & 32) ? 0x2400 : 0x2000) + ((u16)y << 5) + (x & 31), t, n);
 }
-void r_attr(u8 page, u8 idx, u8 v){ put((u16)(page ? 0x27C0 : 0x23C0) + idx, &v, 1); }
+/* r_column and r_attr are in platform/nes/upload.s. The C versions compiled
+   to a stack-heavy loop and a 64-column load missed vblank for about a second. */
 void r_scroll(u16 x){ scroll_x = (u8)x; ppu_ctrl = (u8)(0x80 | ((x >> 8) & 1)); }
-void r_bulk_begin(void){ wait_vblank(); PPUMASK = 0; PPUCTRL = 0; direct = 1; } /* NMI off: direct writes are not interrupted */
-void r_bulk_end(void){ direct = 0; PPUCTRL = ppu_ctrl; wait_vblank(); PPUMASK = 0x1E; }
+void r_bulk_begin(void){ wait_vblank(); PPUMASK = 0; PPUCTRL = 0; ppu_direct = 1; } /* NMI off: direct writes are not interrupted */
+void r_bulk_end(void){ ppu_direct = 0; PPUCTRL = ppu_ctrl; wait_vblank(); PPUMASK = 0x1E; }
+u8 r_in_bulk(void){ return ppu_direct; }
 u8 *r_oam(void){ return (u8*)0x200; }
 /* Write $4003/$400B/$400F only when the timer high byte changes or a note starts.
    Those registers restart the sequencer and would buzz if written every frame. */

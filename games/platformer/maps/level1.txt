@@ -1,3 +1,4 @@
+music play
 legend:
 . 0x20 pal=0
 g 0x80 pal=1 solid

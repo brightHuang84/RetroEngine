@@ -23,7 +23,7 @@ void bg_attr(u8 x, u8 y, u8 pal);             /* palette 0..3 for the 16x16 bloc
 void bg_text(u8 x, u8 y, const char *s);      /* tile index = ASCII */
 void bg_number(u8 x, u8 y, u16 v, u8 digits); /* zero padded */
 void bg_load(const u8 *map, u8 w, u8 h, const u8 *attr); /* bulk: use only in scene init. attr = 64 bytes per 32-wide page or 0 */
-void bg_scroll(u16 x);                        /* horizontal scroll 0..511 */
+void bg_scroll(u16 x);                        /* horizontal scroll 0..511, nametable window only */
 /* Queued tile writes: on NES they are flushed during vblank (~96 bytes/frame); if the
    queue overflows the engine waits one frame (lag). During scene init writes are direct. */
 
@@ -82,9 +82,39 @@ typedef s16 fx;                 /* 12.4 fixed point: world up to +-2047 px */
 #define FX_INT(v) ((s16)((v) >> FX_SHIFT))
 u8 aabb(s16 ax, s16 ay, u8 aw, u8 ah, s16 bx, s16 by, u8 bw, u8 bh);
 #define TF_SOLID 0x01
-void tm_bind(const u8 *map, u8 w, u8 h, const u8 *flags256); /* collision map (usually same as bg_load) */
-u8   tm_flags_at(s16 px, s16 py);             /* flags of tile at world pixel; outside map = solid */
+void tm_bind(const u8 *map, u8 w, u8 h, const u8 *flags256); /* raw collision map (width fits in u8) */
+u8   tm_flags_at(s16 px, s16 py);             /* flags of tile at world pixel; outside left/right/above = solid */
 u16  rnd(void);
+
+/* ---------- levels ----------
+   games/<game>/maps/order.txt is the level list. Each map is column-RLE in ROM
+   (see tools/mappack.py). level_load uploads the 64-column nametable window.
+   level_scroll streams columns as the camera moves. tm_flags_at then reads one
+   column from the blob, so the whole map is not decompressed into RAM.
+   test_level 255 and test_cam 65535 mean "not set" (SDL: RETRO_LEVEL, RETRO_CAM). */
+typedef struct Level {
+  const u8 *pack;
+  const u16 *index;
+  const u8 *attr;
+  const u8 *flags;
+  const u8 *ents;
+  u16 cols;
+  u8 rows;
+  u8 ent_n;
+  u8 music;
+} Level;
+u8 game_level_count(void);                   /* provided by generated maps.c */
+const Level *game_level(u8 n);
+void level_load(u8 n);                       /* scene init, or mid-game (blanks while uploading) */
+u8   level_count(void);
+u8   level_current(void);
+u16  level_cols(void);
+u8   level_music(void);
+const u8 *level_ents(void);
+u8   level_ent_n(void);
+void level_scroll(u16 cam_px);               /* keep the 2-screen window on this camera */
+extern u8 test_level;
+extern u16 test_cam;
 
 /* ---------- entities (ROM tables from entities.txt + the map) ----------
    One record is ENT_BYTES bytes: type, x lo/hi, y, then 4 little-endian u16 props.

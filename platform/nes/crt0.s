@@ -74,14 +74,32 @@ nmi:
     lda _vram_buf,x
     sta $2006
     inx
-    ldy _vram_buf,x
+    lda _vram_buf,x
+    bmi @down          ; bit 7 is the column flag; INX would clobber N
     inx
+    tay
 @copy:
     lda _vram_buf,x
     sta $2007
     inx
     dey
     bne @copy
+    jmp @next
+@down:
+    and #$7F
+    inx
+    tay
+    lda _ppu_ctrl
+    ora #$04
+    sta $2000
+@dcopy:
+    lda _vram_buf,x
+    sta $2007
+    inx
+    dey
+    bne @dcopy
+    lda _ppu_ctrl
+    sta $2000
     jmp @next
 @done:
     lda _scroll_x

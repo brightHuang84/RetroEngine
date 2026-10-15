@@ -7,7 +7,7 @@ GEN  := $(B)/gen
 ENGINE_SRC := engine/engine.c
 GAME_SRC   := $(G)/game.c
 HDRS := engine/engine.h engine/backend.h $(GEN)/assets.h $(GEN)/music.h
-ASSET_SRC := $(G)/tiles.png $(wildcard $(G)/*.txt $(G)/*.csv $(G)/*.legend) tools/png2chr.py tools/png2gba.py tools/map2c.py tools/ent2c.py tools/build_assets.py
+ASSET_SRC := $(G)/tiles.png $(wildcard $(G)/*.txt $(G)/maps/*.txt $(G)/maps/order.txt $(G)/*.csv $(G)/*.legend) tools/png2chr.py tools/png2gba.py tools/map2c.py tools/mappack.py tools/ent2c.py tools/build_assets.py tools/romusage.py
 MUS_SRC := $(GEN)/music.c
 
 # `all` tries every optional target. A missing toolchain prints "skip <target>"
@@ -73,6 +73,7 @@ $(B)/pc/$(GAME): $(PC_SRC) $(HDRS) render/render_soft.h
 	@command -v sdl2-config >/dev/null 2>&1 || { echo "pc: sdl2-config not found (install libsdl2-dev)"; exit 1; }
 	@mkdir -p $(@D)
 	gcc -O2 -std=c99 -Wall -Wextra -I. -I$(GEN) -o $@ $(PC_SRC) `sdl2-config --cflags --libs`
+	python3 tools/romusage.py pc $@
 
 # ---------------- UEFI (gnu-efi) ----------------
 # Paths come from tools/uefi_probe.sh (pkg-config gnu-efi, then /usr/lib and
@@ -93,6 +94,7 @@ $(B)/uefi/BOOTX64.EFI: $(EFI_SRC) $(HDRS) render/render_soft.h tools/uefi_probe.
 	  gcc $(EFI_CFLAGS) -I$$EFI_INC $${EFI_INC_ARCH:+-I$$EFI_INC_ARCH} -c $$f -o $(B)/uefi/obj/`basename $$f .c`.o || exit 1; \
 	done && \
 	tools/uefi_link.sh $(B)/uefi/obj $@ $(EFI_OBJ)
+	python3 tools/romusage.py uefi $@
 img: $(B)/uefi/$(GAME).img
 $(B)/uefi/$(GAME).img: $(B)/uefi/BOOTX64.EFI tools/mkimg.sh
 	@command -v mcopy >/dev/null 2>&1 && command -v mkfs.fat >/dev/null 2>&1 || { echo "img: mcopy and mkfs.fat not found (install mtools and dosfstools)"; exit 1; }
@@ -102,14 +104,17 @@ $(B)/uefi/$(GAME).img: $(B)/uefi/BOOTX64.EFI tools/mkimg.sh
 NO := $(B)/nes/obj
 NES_C := $(ENGINE_SRC) $(GAME_SRC) render/render_nes.c platform/nes/main.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
 nes: $(B)/nes/$(GAME).nes
-$(B)/nes/$(GAME).nes: $(NES_C) $(HDRS) platform/nes/nes.h platform/nes/crt0.s platform/nes/nes.cfg $(GEN)/game.chr
+$(B)/nes/$(GAME).nes: $(NES_C) $(HDRS) platform/nes/nes.h platform/nes/crt0.s platform/nes/upload.s platform/nes/nes.cfg $(GEN)/game.chr
 	@command -v cc65 >/dev/null 2>&1 && command -v ca65 >/dev/null 2>&1 && command -v ld65 >/dev/null 2>&1 || { echo "nes: cc65, ca65, and ld65 not found (install cc65)"; exit 1; }
 	@mkdir -p $(NO)
 	for f in $(NES_C); do n=`basename $$f .c`; cc65 -t nes -Oirs -I. -I$(GEN) $$f -o $(NO)/$$n.s || exit 1; \
 	  ca65 -t nes $(NO)/$$n.s -o $(NO)/$$n.o || exit 1; done
 	ca65 -t nes --bin-include-dir $(GEN) platform/nes/crt0.s -o $(NO)/crt0.o
-	ld65 -C platform/nes/nes.cfg -o $@ -m $(B)/nes/$(GAME).map $(NO)/crt0.o \
-	  $(addprefix $(NO)/,$(notdir $(NES_C:.c=.o))) lib/none.lib
+	ca65 -t nes platform/nes/upload.s -o $(NO)/upload.o
+	ld65 -C platform/nes/nes.cfg -o $@ -m $(B)/nes/$(GAME).map $(NO)/crt0.o $(NO)/upload.o \
+	  $(addprefix $(NO)/,$(notdir $(NES_C:.c=.o))) lib/none.lib \
+	  || { echo "错误：NES NROM 的 32KB PRG 放不下。这是 mapper 0，没有升级到 UxROM 或 MMC1。"; exit 1; }
+	python3 tools/romusage.py nes $@ $(B)/nes/$(GAME).map
 
 # ---------------- GBA (arm-none-eabi-gcc; not part of `all`) ----------------
 # devkitARM/libtonc are not Ubuntu packages. gcc-arm-none-eabi plus platform/gba
@@ -127,6 +132,7 @@ define build_gba
 	arm-none-eabi-objcopy -O binary $(1:.gba=.elf) $(1)
 	@if command -v gbafix >/dev/null 2>&1; then gbafix $(1) -t$(shell printf '%s' $(GAME) | tr a-z A-Z | cut -c1-12); \
 	else python3 tools/gbafix.py $(1) $(GAME); fi
+	python3 tools/romusage.py gba $(1)
 endef
 
 gba: $(B)/gba/$(GAME).gba

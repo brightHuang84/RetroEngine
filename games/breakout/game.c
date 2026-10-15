@@ -46,17 +46,18 @@ const Scene title_scene = { title_init, title_update, title_draw };
 
 /* ---------- play ---------- */
 static void load_starts(void){
-  u8 i; const u8 *e;
+  u8 i, n; const u8 *e, *ents;
   pad_y = PAD_Y;
   padx = (u8)((SCREEN_W - PAD_W) / 2);
   ball_dx = (s8)(PAD_W / 2 - 4);
   ball_dy = -8;
-  for(i = 0; i < MAP_PLAY_ENT_N; i++){
-    e = ent_ptr(map_play_ent, i);
+  ents = level_ents(); n = level_ent_n();
+  for(i = 0; i < n; i++){
+    e = ent_ptr(ents, i);
     if(ent_type(e) == ENT_PADDLE){ padx = (u8)ent_x(e); pad_y = ent_y(e); }
   }
-  for(i = 0; i < MAP_PLAY_ENT_N; i++){
-    e = ent_ptr(map_play_ent, i);
+  for(i = 0; i < n; i++){
+    e = ent_ptr(ents, i);
     if(ent_type(e) == ENT_BALL){
       ball_dx = (s8)((s16)ent_x(e) - (s16)padx);
       ball_dy = (s8)((s16)ent_y(e) - (s16)pad_y);
@@ -66,7 +67,7 @@ static void load_starts(void){
 static void serve(void){ serving = 1; vx = 0; vy = 0; bg_text(8, 16, "PRESS A TO LAUNCH"); }
 static void play_init(void){
   u8 r, c;
-  bg_load(map_play, MAP_PLAY_W, MAP_PLAY_H, map_play_attr);
+  level_load(0);
   bg_text(2, 1, "SCORE:"); bg_text(23, 1, "LIVES:");
   for(r = 0; r < BR_ROWS; r++) for(c = 0; c < BR_COLS; c++){
     bricks[r][c] = 1; draw_brick(r, c, 1); bg_attr((u8)(BR_TX + c * 2), (u8)(BR_TY + r), (u8)(r >> 1));

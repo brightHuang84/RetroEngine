@@ -1,4 +1,4 @@
-/* GENERATED from games/breakout/play.txt by tools/map2c.py */
+/* GENERATED from games/breakout/maps/play.txt by tools/map2c.py */
 #define MAP_PLAY_W 32
 #define MAP_PLAY_H 30
 const unsigned char map_play[960] = {

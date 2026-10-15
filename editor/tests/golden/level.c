@@ -1,4 +1,4 @@
-/* GENERATED from games/platformer/level.txt by tools/map2c.py */
+/* GENERATED from games/platformer/maps/level1.txt by tools/map2c.py */
 #define MAP_LEVEL_W 64
 #define MAP_LEVEL_H 30
 const unsigned char map_level[1920] = {

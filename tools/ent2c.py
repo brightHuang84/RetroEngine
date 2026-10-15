@@ -250,6 +250,29 @@ def emit_map(spec, entities, name, where):
     return '\n'.join(out)
 
 
+def map_sources(game_dir):
+    """(name, text, path) in level order. maps/order.txt wins over loose *.txt."""
+    order = os.path.join(game_dir, 'maps', 'order.txt')
+    found = []
+    if os.path.exists(order):
+        for line in open(order):
+            name = line.split('#', 1)[0].strip()
+            if not name:
+                continue
+            full = os.path.join(game_dir, 'maps', name + '.txt')
+            found.append((name, open(full).read(), full))
+        return found
+    for fn in sorted(os.listdir(game_dir)):
+        if not fn.endswith('.txt') or fn.lower() in ('songs.txt', 'palette.txt', 'entities.txt'):
+            continue
+        full = os.path.join(game_dir, fn)
+        text = open(full).read()
+        if '\nmap:' not in '\n' + text and not text.startswith('map:'):
+            continue
+        found.append((os.path.splitext(fn)[0], text, full))
+    return found
+
+
 def emit_game(game_dir):
     path = os.path.join(game_dir, 'entities.txt')
     if not os.path.exists(path):
@@ -259,17 +282,8 @@ def emit_game(game_dir):
              '#define ENT_LIMIT %d' % spec.limit]
     for t in spec.types:
         lines.append('#define ENT_%s %d' % (t.name.upper(), t.id))
-    maps = []
-    for fn in sorted(os.listdir(game_dir)):
-        if not fn.endswith('.txt') or fn.lower() in ('songs.txt', 'palette.txt', 'entities.txt'):
-            continue
-        full = os.path.join(game_dir, fn)
-        text = open(full).read()
-        if '\nmap:' not in '\n' + text and not text.startswith('map:'):
-            continue
-        maps.append((os.path.splitext(fn)[0], entities_from_map_text(text, full), full))
-    for name, ents, full in maps:
-        lines.append(emit_map(spec, ents, name, full))
+    for name, text, full in map_sources(game_dir):
+        lines.append(emit_map(spec, entities_from_map_text(text, full), name, full))
     return '\n'.join(lines) + '\n'
 
 

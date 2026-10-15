@@ -143,6 +143,7 @@ class GameMap(object):
         self.rows = []
         self.override = None  # None, or h rows of w ints/None
         self.entities = []
+        self.music = ''
         self.original = ''
 
     def copy_state(self):
@@ -150,14 +151,16 @@ class GameMap(object):
         if self.override is not None:
             ov = [row[:] for row in self.override]
         legs = [(e.char, e.tile, e.pal, e.solid) for e in self.legend]
-        return (tuple(self.rows), tuple(legs), ov, tuple(e.copy() for e in self.entities))
+        return (tuple(self.rows), tuple(legs), ov, tuple(e.copy() for e in self.entities), self.music)
 
     def restore_state(self, state):
-        rows, legs, ov, ents = state
+        rows, legs, ov, ents = state[:4]
         self.rows = list(rows)
         self.legend = [LegendEntry(c, t, p, s) for c, t, p, s in legs]
         self.override = [row[:] for row in ov] if ov is not None else None
         self.entities = [e.copy() for e in ents]
+        if len(state) > 4:
+            self.music = state[4]
 
     @property
     def w(self):
@@ -274,7 +277,10 @@ class GameMap(object):
             self.place(x, y, tile, pal)
 
     def emit(self, spec=None):
-        lines = ['legend:']
+        lines = []
+        if self.music:
+            lines.append('music %s' % self.music)
+        lines.append('legend:')
         for e in self.legend:
             line = '%s 0x%02X pal=%d' % (e.char, e.tile, e.pal)
             if e.solid:
@@ -301,6 +307,12 @@ def load_map(path):
     legend = {}
     for line in gm.original.splitlines():
         raw = line.rstrip('\n')
+        stripped = raw.strip()
+        if mode is None and stripped.startswith('music ') and not stripped.startswith('music:'):
+            parts = stripped.split()
+            if len(parts) >= 2:
+                gm.music = parts[1]
+            continue
         if raw.strip() in ('legend:', 'map:', 'palmap:', 'entities:'):
             mode = raw.strip()
             continue
@@ -335,8 +347,35 @@ def load_map(path):
     return gm
 
 
+def maps_dir(game_dir):
+    return os.path.join(game_dir, 'maps')
+
+
+def order_path(game_dir):
+    return os.path.join(game_dir, 'maps', 'order.txt')
+
+
+def order_text(names):
+    return '# 关卡顺序，一行一个名字。\n' + '\n'.join(names) + '\n'
+
+
+def valid_map_name(name):
+    return bool(name) and name[0].isalpha() and all(c.isalnum() or c == '_' for c in name)
+
+
 def list_maps(game_dir):
+    op = order_path(game_dir)
+    if os.path.exists(op):
+        out = []
+        for line in open(op):
+            name = line.split('#', 1)[0].strip()
+            if not name:
+                continue
+            out.append(load_map(os.path.join(maps_dir(game_dir), name + '.txt')))
+        return out
     out = []
+    if not os.path.isdir(game_dir):
+        return out
     for fn in sorted(os.listdir(game_dir)):
         if not fn.endswith('.txt'):
             continue
@@ -568,6 +607,7 @@ class Project(object):
         self.code = open(self.code_path).read() if os.path.exists(self.code_path) else ''
         self.entities_path = os.path.join(self.root, 'entities.txt')
         self.entity_spec = ent2c.load_types(self.entities_path)
+        self.removed_maps = []
         self.dirty = {
             'palette': False, 'tiles': False, 'maps': False,
             'songs': False, 'code': False, 'entities': False,
@@ -578,6 +618,88 @@ class Project(object):
             if m.name == name:
                 return m
         return self.maps[0] if self.maps else None
+
+    def _fresh_map(self, name, width, src):
+        if not valid_map_name(name):
+            raise ValueError('地图名要是字母开头的英文名')
+        if any(m.name == name for m in self.maps):
+            raise ValueError('已经有地图 %s' % name)
+        if width % 32 or not 32 <= width <= 512:
+            raise ValueError('宽度要是 32 的倍数，32 到 512')
+        gm = GameMap(name, os.path.join(maps_dir(self.root), name + '.txt'))
+        if src is None:
+            gm.legend = [LegendEntry('.', 0x20, 0, False)]
+            gm.music = 'play'
+        else:
+            gm.legend = [LegendEntry(e.char, e.tile, e.pal, e.solid) for e in src.legend]
+            gm.music = src.music
+        fill = gm.legend[0].char if gm.legend else '.'
+        gm.rows = [fill * width for _ in range(30)]
+        return gm
+
+    def add_map(self, name, width, src=None):
+        gm = self._fresh_map(name, width, src)
+        self.maps.append(gm)
+        self.dirty['maps'] = True
+        return gm
+
+    def duplicate_map(self, name):
+        src = self.map_by_name(name)
+        if src is None:
+            raise ValueError('没有这张地图')
+        new_name = name + '_copy'
+        n = 2
+        while any(m.name == new_name for m in self.maps):
+            new_name = '%s_copy%d' % (name, n)
+            n += 1
+        gm = self._fresh_map(new_name, src.w if src.w % 32 == 0 else 32, None)
+        gm.legend = [LegendEntry(e.char, e.tile, e.pal, e.solid) for e in src.legend]
+        gm.rows = list(src.rows)
+        gm.override = [row[:] for row in src.override] if src.override is not None else None
+        gm.entities = [e.copy() for e in src.entities]
+        gm.music = src.music
+        idx = self.maps.index(src) + 1
+        self.maps.insert(idx, gm)
+        self.dirty['maps'] = True
+        return gm
+
+    def rename_map(self, old, new):
+        if not valid_map_name(new):
+            raise ValueError('地图名要是字母开头的英文名')
+        src = self.map_by_name(old)
+        if src is None:
+            raise ValueError('没有这张地图')
+        if new != old and any(m.name == new for m in self.maps):
+            raise ValueError('已经有地图 %s' % new)
+        if os.path.isfile(src.path):
+            self.removed_maps.append(src.path)
+        src.name = new
+        src.path = os.path.join(maps_dir(self.root), new + '.txt')
+        src.original = ''
+        self.dirty['maps'] = True
+        return src
+
+    def delete_map(self, name):
+        if len(self.maps) <= 1:
+            raise ValueError('至少留一张地图')
+        src = self.map_by_name(name)
+        if src is None:
+            raise ValueError('没有这张地图')
+        if os.path.isfile(src.path):
+            self.removed_maps.append(src.path)
+        self.maps.remove(src)
+        self.dirty['maps'] = True
+
+    def move_map(self, name, delta):
+        src = self.map_by_name(name)
+        if src is None:
+            return
+        i = self.maps.index(src)
+        j = i + delta
+        if j < 0 or j >= len(self.maps):
+            return
+        self.maps[i], self.maps[j] = self.maps[j], self.maps[i]
+        self.dirty['maps'] = True
 
     def save(self):
         if self.dirty['palette']:
@@ -590,13 +712,23 @@ class Project(object):
             ent2c.save_types(self.entities_path, self.entity_spec)
             self.dirty['entities'] = False
         if self.dirty['maps']:
+            directory = maps_dir(self.root)
+            os.makedirs(directory, exist_ok=True)
             for m in self.maps:
                 text = m.emit(self.entity_spec)
-                # Unedited maps keep their original bytes when the canonical
-                # form would only reshuffle whitespace. Compare via map2c in tests;
-                # here, write canonical text once the map has been touched.
-                open(m.path, 'w').write(text)
-                m.original = text
+                m.path = os.path.join(directory, m.name + '.txt')
+                if text != m.original or not os.path.exists(m.path):
+                    open(m.path, 'w').write(text)
+                    m.original = text
+            op = order_path(self.root)
+            text = order_text([m.name for m in self.maps])
+            old = open(op).read() if os.path.exists(op) else None
+            if old != text:
+                open(op, 'w').write(text)
+            for path in self.removed_maps:
+                if os.path.isfile(path) and path not in [m.path for m in self.maps]:
+                    os.remove(path)
+            self.removed_maps = []
             self.dirty['maps'] = False
         if self.dirty['songs']:
             self.songs_text = emit_songs(self.songs)
@@ -617,7 +749,7 @@ BLANK_GAME_C = r'''/* 空白游戏。只包含 engine.h，不要写平台相关�
 
 static void init(void){
   gfx_palette(game_palette);
-  bg_load(map_level, MAP_LEVEL_W, MAP_LEVEL_H, map_level_attr);
+  level_load(0);
   bg_text(10, 14, "NEW GAME");
   music_play(MUS_TITLE);
 }
@@ -667,9 +799,11 @@ def create_project(games_dir, name, template_root):
         im = Image.new('L', (128, 128), 0)
         im.save(os.path.join(dst, 'tiles.png'))
     save_palette(os.path.join(dst, 'palette.txt'), BLANK_PALETTE)
+    os.makedirs(os.path.join(dst, 'maps'))
     rows = ['.' * 32 for _ in range(30)]
-    legend = 'legend:\n. 0x20 pal=0\n# 0x82 pal=3 solid\nmap:\n' + '\n'.join(rows) + '\n'
-    open(os.path.join(dst, 'level.txt'), 'w').write(legend)
+    legend = 'music title\nlegend:\n. 0x20 pal=0\n# 0x82 pal=3 solid\nmap:\n' + '\n'.join(rows) + '\n'
+    open(os.path.join(dst, 'maps', 'level.txt'), 'w').write(legend)
+    open(os.path.join(dst, 'maps', 'order.txt'), 'w').write(order_text(['level']))
     open(os.path.join(dst, 'songs.txt'), 'w').write(BLANK_SONG)
     open(os.path.join(dst, 'game.c'), 'w').write(BLANK_GAME_C)
     return dst

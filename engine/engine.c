@@ -1,4 +1,6 @@
-/* retro_engine core: shared by all platforms, no platform #ifdefs. */
+/* retro_engine core: shared by all platforms.
+   The only platform split is the NES column decoder, which lives in
+   platform/nes/upload.s so a 64-column upload does not stall for a second. */
 #include "backend.h"
 
 u8 pad_held, pad_pressed, pad_released, frame_count;
@@ -8,6 +10,19 @@ static u8 *oam;
 static u8 nspr;
 static const u8 *tm_map, *tm_flags;
 static u8 tm_w, tm_h;
+static u8 lv_on, lv_id;
+static u16 lv_right;
+#ifdef __NES__
+/* upload.s reads these. The column decoder there is a straight 6502 loop. */
+const Level *lv;
+u8 lv_col[30];
+void lv_decode(u16 c);
+#else
+static const Level *lv;
+static u8 lv_col[30];
+#endif
+u8 test_level = 255;
+u16 test_cam = (u16)-1;
 static u16 seed = 0x1234;
 static char numbuf[6];
 
@@ -177,9 +192,126 @@ static void audio_tick(void){
 u8 aabb(s16 ax, s16 ay, u8 aw, u8 ah, s16 bx, s16 by, u8 bw, u8 bh){
   return (u8)(ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah);
 }
-void tm_bind(const u8 *map, u8 w, u8 h, const u8 *flags){ tm_map = map; tm_w = w; tm_h = h; tm_flags = flags; }
+void tm_bind(const u8 *map, u8 w, u8 h, const u8 *flags){
+  lv_on = 0; tm_map = map; tm_w = w; tm_h = h; tm_flags = flags;
+}
+/* One column of the packed level. Packets are the format in tools/mappack.py. */
+static u8 lv_tile(u16 tx, u8 ty){
+  const u8 *p = lv->pack + lv->index[tx];
+  const u8 *end = lv->pack + lv->index[(u16)(tx + 1)];
+  u8 row = 0;
+  while(p < end && row <= ty){
+    u8 cmd = *p++, n = (u8)(cmd & 127);
+    if(!n) continue;
+    if(cmd & 128){
+      u8 t = *p++;
+      if(ty < (u8)(row + n)) return t;
+      row = (u8)(row + n);
+    } else {
+      if(ty < (u8)(row + n)) return p[(u8)(ty - row)];
+      p += n; row = (u8)(row + n);
+    }
+  }
+  return 0;
+}
+/* Walk the column once. A per-row walk restarts the RLE and, on 6502,
+   makes a 64-column load take more than a second with the screen off. */
+#ifndef __NES__
+static void lv_decode(u16 c){
+  const u8 *p = lv->pack + lv->index[c];
+  const u8 *end = lv->pack + lv->index[(u16)(c + 1)];
+  u8 row = 0, rows = lv->rows, cmd, n, k, t;
+  if(rows > BG_H) rows = BG_H;
+  while(p < end && row < rows){
+    cmd = *p++; n = (u8)(cmd & 127);
+    if(!n) continue;
+    if(cmd & 128){
+      t = *p++;
+      for(k = 0; k < n && row < rows; k++) lv_col[row++] = t;
+    } else {
+      for(k = 0; k < n && row < rows; k++) lv_col[row++] = *p++;
+    }
+  }
+  while(row < rows) lv_col[row++] = 0;
+}
+#endif
+static void lv_paint(u16 c){
+  u8 ay, nt, idx, b;
+  u16 base;
+  lv_decode(c);
+  r_column((u8)(c & 63), lv_col, lv->rows);
+  nt = (u8)((c & 63) >> 5);
+  base = (u16)((c >> 5) * 64);
+  for(ay = 0; ay < 8; ay++){
+    idx = (u8)(ay * 8 + ((c & 31) >> 2));
+    b = lv->attr[base + idx];
+    attr[nt][idx] = b;
+    r_attr(nt, idx, b);
+  }
+}
+u8 level_count(void){ return game_level_count(); }
+u8 level_current(void){ return lv_id; }
+u16 level_cols(void){ return (lv_on && lv) ? lv->cols : 0; }
+u8 level_music(void){ return (lv_on && lv) ? lv->music : 0; }
+const u8 *level_ents(void){ return (lv_on && lv) ? lv->ents : 0; }
+u8 level_ent_n(void){ return (lv_on && lv) ? lv->ent_n : 0; }
+void level_load(u8 n){
+  u16 c, last, i;
+  u8 nested;
+  if(!game_level_count()) return;
+  if(n >= game_level_count()) n = 0;
+  lv = game_level(n);
+  lv_on = 1; lv_id = n;
+  tm_map = 0;
+  nested = r_in_bulk();
+  if(!nested) r_bulk_begin();
+  for(i = 0; i < 64; i++){ attr[0][i] = 0; attr[1][i] = 0; }
+  last = lv->cols ? (u16)(lv->cols - 1) : 0;
+  if(last > 63) last = 63;
+  for(c = 0; c <= last; c++) lv_paint(c);
+  if(lv->cols <= 32) for(i = 0; i < 64; i++){ attr[1][i] = 0; r_attr(1, i, 0); }
+  lv_right = last;
+  if(!nested) r_bulk_end();
+}
+void level_scroll(u16 cam){
+  u16 cols, maxc, need_l, need_r, win_l, start, c;
+  u8 nested;
+  if(!lv_on || !lv || !lv->cols){ r_scroll(0); return; }
+  cols = lv->cols;
+  maxc = (cols > 32) ? (u16)((cols - 32) << 3) : 0;
+  if(cam > maxc) cam = maxc;
+  if(cols <= 32){ r_scroll(0); return; }
+  need_l = (u16)(cam >> 3);
+  need_r = (u16)((cam + 255) >> 3);
+  if(need_r >= cols) need_r = (u16)(cols - 1);
+  win_l = (lv_right >= 63) ? (u16)(lv_right - 63) : 0;
+  if(need_l >= win_l && need_r <= lv_right){
+    r_scroll((u16)(cam & 511));
+    return;
+  }
+  if(need_r > lv_right && (u16)(need_r - lv_right) <= 2){
+    while(lv_right < need_r){ lv_right++; lv_paint(lv_right); }
+  } else if(lv_right > (u16)(need_l + 63) && (u16)(lv_right - (need_l + 63)) <= 2){
+    while((u16)(need_l + 63) < lv_right){ lv_paint((u16)(lv_right - 64)); lv_right--; }
+  } else {
+    nested = r_in_bulk();
+    if(!nested) r_bulk_begin();
+    start = (need_r >= 63) ? (u16)(need_r - 63) : 0;
+    for(c = start; c <= need_r; c++) lv_paint(c);
+    lv_right = need_r;
+    if(!nested) r_bulk_end();
+  }
+  r_scroll((u16)(cam & 511));
+}
 u8 tm_flags_at(s16 px, s16 py){
   s16 tx, ty;
+  if(lv_on && lv){
+    if(px < 0 || py < 0) return TF_SOLID;
+    tx = (s16)(px >> 3); ty = (s16)(py >> 3);
+    if(tx >= (s16)lv->cols) return TF_SOLID;
+    if(ty >= (s16)lv->rows) return 0;
+    return lv->flags[lv_tile((u16)tx, (u8)ty)];
+  }
   if(!tm_map) return 0;
   if(px < 0 || py < 0) return TF_SOLID;
   tx = px >> 3; ty = py >> 3;
@@ -206,7 +338,7 @@ void engine_frame(u8 raw){
     cur = next; next = 0;
     r_bulk_begin();
     for(i = 0; i < 64; i++){ attr[0][i] = attr[1][i] = 0; }
-    tm_map = 0; r_scroll(0);
+    tm_map = 0; lv_on = 0; r_scroll(0);
     cur->init();
     r_bulk_end();
     pad_pressed = 0;

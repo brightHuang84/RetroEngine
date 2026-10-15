@@ -188,10 +188,11 @@ def map_image(project, game_map, scale, grid=True, screens=True, conflicts=True,
             painter.drawLine(0, y, img.width(), y)
     if screens:
         painter.setPen(QPen(QColor('#ffd24a'), 2))
-        for col in (32, 64):
+        col = 32
+        while col < w:
             x = col * 8 * scale
-            if x < img.width():
-                painter.drawLine(x, 0, x, img.height())
+            painter.drawLine(x, 0, x, img.height())
+            col += 32
     if conflicts:
         painter.setPen(QPen(QColor('#ff4040'), 2))
         for x, y, _pals in data.attribute_conflicts(w, h, game_map.effective_pal):
@@ -583,6 +584,19 @@ class MapTab(QWidget):
         self.map_box.currentIndexChanged.connect(self._map_changed)
         side.addWidget(QLabel('地图'))
         side.addWidget(self.map_box)
+        ops = QGridLayout()
+        for i, (label, slot) in enumerate((
+            ('新建', self.new_map), ('复制', self.duplicate_map), ('改名', self.rename_map),
+            ('删除', self.delete_map), ('上移', self.move_up), ('下移', self.move_down),
+        )):
+            b = QPushButton(label)
+            b.clicked.connect(slot)
+            ops.addWidget(b, i // 3, i % 3)
+        side.addLayout(ops)
+        self.music_box = QComboBox()
+        self.music_box.currentIndexChanged.connect(self._music_changed)
+        side.addWidget(QLabel('本关音乐'))
+        side.addWidget(self.music_box)
         self.mode_box = QComboBox()
         self.mode_box.addItem('图块')
         self.mode_box.addItem('实体')
@@ -672,13 +686,46 @@ class MapTab(QWidget):
         self.selected = None
         self._drag = None
         self._prop_sig = None
-        self.map_box.blockSignals(True)
-        self.map_box.clear()
-        for m in project.maps:
-            self.map_box.addItem('%s  (%d×%d)' % (m.name, m.w, m.h), m.name)
-        self.map_box.blockSignals(False)
+        self._refill_maps(project.maps[0].name if project.maps else None)
         self._fill_types()
         self.refresh()
+
+    def _refill_maps(self, select):
+        self.map_box.blockSignals(True)
+        self.map_box.clear()
+        for m in self.project.maps:
+            self.map_box.addItem('%s  (%d×%d)' % (m.name, m.w, m.h), m.name)
+        if select:
+            idx = self.map_box.findData(select)
+            if idx >= 0:
+                self.map_box.setCurrentIndex(idx)
+        self.map_box.blockSignals(False)
+        self._fill_music()
+
+    def _fill_music(self):
+        self.music_box.blockSignals(True)
+        self.music_box.clear()
+        names = [s.name for s in self.project.songs] if self.project else []
+        if not names:
+            names = ['title', 'play']
+        for name in names:
+            self.music_box.addItem(name, name)
+        m = self.current()
+        if m and m.music:
+            idx = self.music_box.findData(m.music)
+            if idx >= 0:
+                self.music_box.setCurrentIndex(idx)
+        self.music_box.blockSignals(False)
+
+    def _music_changed(self, _i):
+        m = self.current()
+        name = self.music_box.currentData()
+        if not m or not name or m.music == name:
+            return
+        self.hist.push(m.copy_state())
+        m.music = name
+        self.project.dirty['maps'] = True
+        self.window.touch()
 
     def current(self):
         if not self.project or not self.project.maps:
@@ -690,7 +737,105 @@ class MapTab(QWidget):
         self.selected = None
         self._drag = None
         self._prop_sig = None
+        m = self.current()
+        if m and m.w > 64:
+            self.zoom.setValue(1)
+        self._fill_music()
         self.refresh()
+
+    def _guard(self):
+        if not self.project:
+            return None
+        return self.current()
+
+    def new_map(self):
+        if not self.project:
+            return
+        box = QDialog(self)
+        box.setWindowTitle('新建地图')
+        form = QFormLayout(box)
+        name = QLineEdit('level%d' % (len(self.project.maps) + 1))
+        width = QSpinBox()
+        width.setRange(32, 512)
+        width.setSingleStep(32)
+        width.setValue(64)
+        form.addRow('名字', name)
+        form.addRow('宽度（列，32 的倍数，高度固定 30）', width)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(box.accept)
+        buttons.rejected.connect(box.reject)
+        form.addRow(buttons)
+        if box.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            gm = self.project.add_map(name.text().strip(), width.value(), self.current())
+        except ValueError as exc:
+            QMessageBox.warning(self, '新建地图', str(exc))
+            return
+        self._refill_maps(gm.name)
+        self.refresh()
+        self.window.touch()
+
+    def duplicate_map(self):
+        m = self._guard()
+        if not m:
+            return
+        try:
+            gm = self.project.duplicate_map(m.name)
+        except ValueError as exc:
+            QMessageBox.warning(self, '复制地图', str(exc))
+            return
+        self._refill_maps(gm.name)
+        self.refresh()
+        self.window.touch()
+
+    def rename_map(self):
+        m = self._guard()
+        if not m:
+            return
+        text, ok = QInputDialog.getText(self, '改名', '新名字', text=m.name)
+        if not ok:
+            return
+        try:
+            gm = self.project.rename_map(m.name, text.strip())
+        except ValueError as exc:
+            QMessageBox.warning(self, '改名', str(exc))
+            return
+        self._refill_maps(gm.name)
+        self.refresh()
+        self.window.touch()
+
+    def delete_map(self):
+        m = self._guard()
+        if not m:
+            return
+        ans = QMessageBox.question(self, '删除地图', '删除 %s ？' % m.name)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.project.delete_map(m.name)
+        except ValueError as exc:
+            QMessageBox.warning(self, '删除地图', str(exc))
+            return
+        self._refill_maps(self.project.maps[0].name)
+        self.refresh()
+        self.window.touch()
+
+    def move_up(self):
+        m = self._guard()
+        if not m:
+            return
+        self.project.move_map(m.name, -1)
+        self._refill_maps(m.name)
+        self.window.touch()
+
+    def move_down(self):
+        m = self._guard()
+        if not m:
+            return
+        self.project.move_map(m.name, 1)
+        self._refill_maps(m.name)
+        self.window.touch()
 
     def _set_mode(self, idx):
         self.mode = 'entity' if idx == 1 else 'tile'
@@ -800,7 +945,7 @@ class MapTab(QWidget):
             extra = '，例如 (%d,%d) 调色板 %s' % (x, y, ' 和 '.join(str(p) for p in pals))
             self.hover_label.setText('属性块冲突 %d 处%s。引擎采用该块里第一个非 0 调色板。' % (len(conf), extra))
         else:
-            self.hover_label.setText('黄线是第 32 列的屏幕分界。左键涂格子，右键取图块。')
+            self.hover_label.setText('黄线每 32 列是一屏。宽图在游戏里按列流进两屏的 nametable。左键涂格子，右键取图块。')
         self.window.touch()
 
     def undo(self):
@@ -1602,7 +1747,7 @@ class PreviewTab(QWidget):
         game_map = project.map_by_name(name) if name else (project.maps[0] if project.maps else None)
         if not game_map:
             return
-        scale = 2 if game_map.w <= 32 else 1
+        scale = 1 if game_map.w > 64 else (2 if game_map.w <= 32 else 1)
         img = map_image(project, game_map, scale, True, True, True)
         self.view.setPixmap(QPixmap_from(img))
         self.view.resize(img.size())
@@ -1694,8 +1839,10 @@ class BuildTab(QWidget):
         self.proc = None
         text = self.log.toPlainText()
         tips = re_build.hints_for(text)
+        roms = [ln.strip() for ln in text.splitlines() if ln.strip().startswith('rom ')]
         if code == 0:
-            self.hint.setText('编译完成。')
+            extra = '\n'.join(roms)
+            self.hint.setText('编译完成。' + (('\n' + extra) if extra else ''))
             self.log.appendPlainText('—— 编译完成 ——')
         else:
             self.hint.setText('编译失败（退出码 %d）。\n%s' % (code, '\n'.join(tips)))

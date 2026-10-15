@@ -63,7 +63,7 @@ def main():
     backups = {}
     paths = [
         os.path.join(ROOT, 'games', 'breakout', 'tiles.png'),
-        os.path.join(ROOT, 'games', 'breakout', 'play.txt'),
+        os.path.join(ROOT, 'games', 'breakout', 'maps', 'play.txt'),
         os.path.join(ROOT, 'games', 'breakout', 'songs.txt'),
     ]
     for path in paths:

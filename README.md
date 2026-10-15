@@ -19,7 +19,7 @@ flowchart TD
   RS --> UEFI[platform/uefi<br>GOP 缩放居中, SimpleTextInput, Stall, PC 喇叭]
   RN --> NES[platform/nes<br>crt0.s, nes.cfg, 手柄]
   RG --> GBA[platform/gba<br>crt0.s, gba.ld, 手柄, vblank]
-  A[games/&lt;name&gt;/tiles.png + *.txt/*.csv 地图 + palette.txt + entities.txt] --> T[tools/build_assets.py<br>png2chr.py + png2gba.py + map2c.py + ent2c.py]
+  A[games/&lt;name&gt;/tiles.png + maps/*.txt + palette.txt + entities.txt] --> T[tools/build_assets.py<br>png2chr.py + png2gba.py + mappack.py + ent2c.py]
   T --> CHR[game.chr → NES]
   T --> CA[tiles.c / tiles_gba.c / maps.c / palette.c / assets.h → 各平台]
   S[games/&lt;name&gt;/songs.txt<br>以及 music/*.fms.txt] --> FM[tools/fms2mus.py]
@@ -33,9 +33,9 @@ flowchart TD
 engine/   engine.h（公开 API） backend.h（后端接口） engine.c
 render/   render_soft.c/.h（PC 和 UEFI 共用） render_nes.c  render_gba.c
 platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,nes.cfg,nes.h}  gba/{main_gba.c,crt0.s,gba.ld,gba.h}
-games/    breakout/{game.c,tiles.png,palette.txt,play.txt,entities.txt,songs.txt,music/*.fms.txt,fami/*.fms.txt}  platformer/ 同样
+games/    breakout/{game.c,tiles.png,palette.txt,maps/,entities.txt,songs.txt,music/*.fms.txt,fami/*.fms.txt}  platformer/ 同样
 editor/   桌面编辑器（图块、调色板、地图、实体、音乐、编译运行）。见 editor/README.md
-tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py ent2c.py txt2mus.py fms2mus.py songs2fms.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua qemu_test.sh
+tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py mappack.py romusage.py ent2c.py txt2mus.py fms2mus.py songs2fms.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua fceux_cam.lua qemu_test.sh
 lib/      none.lib（cc65 运行库副本，用于离线编译）
 build/<game>/{pc,uefi,nes,gba,gen}/   编译输出
 shots/    测试截图
@@ -44,13 +44,13 @@ shots/    测试截图
 ## 平台限制（以 NES 为准）
 | 项目 | 限制 |
 |---|---|
-| 屏幕 | 256x240；背景 64x30 tile（两屏宽），支持水平滚动 0..511 |
+| 屏幕 | 256x240；nametable 仍是 64x30 tile。地图可以比两屏宽，相机移动时按列流进去。滚动寄存器仍是 0..511 |
 | 颜色 | 4 组背景调色板 + 4 组精灵调色板，每组 3 色 + 公共背景色；背景调色板按 16x16 区块设置 |
 | 精灵 | 8x8，每帧最多 64 个；NES 上**同一扫描线最多 8 个**，超出的会消失 |
-| RAM | 2KB：$0200 是 OAM，$0300 是 VRAM 队列，$0700 是 C 栈；游戏和引擎变量放在 $0400-$06FF（breakout 的 BSS 是 338 字节，platformer 是 303 字节，含大约 40 字节乐曲状态。实体坐标在 ROM 里，不占这块） |
+| RAM | 2KB：$0200 是 OAM，$0300 是 VRAM 队列，$0700 是 C 栈；游戏和引擎变量放在 $0400-$06FF。DATA+BSS：breakout 379 字节，platformer 378 字节（768 字节里），含大约 40 字节乐曲状态。长地图不展开进 RAM，碰撞按列从 ROM 里的 RLE 读 |
 | 音频 | 4 通道：两路方波、三角波、噪声；没有 DPCM。音效占用 pulse2 |
 | VRAM 写入 | 每帧大约 96 字节，超出时引擎会等一帧（掉一帧）；在场景 `init` 里写入不受限制（此时渲染已关闭） |
-| ROM | NROM：32KB PRG + 8KB CHR（256 个 tile，背景和精灵共用） |
+| ROM | NROM：32KB PRG + 8KB CHR（256 个 tile，背景和精灵共用）。`make` 打印 `rom nes: PRG n/32768 CHR n/8192 RAM n/768`。PRG 放不下就停，并说明这是 mapper 0，没有改成 UxROM 或 MMC1 |
 | 数值 | 整数；`fx` 是 12.4 定点数（范围 ±2047 像素）；cc65 的 `int` 是 16 位 |
 
 ## 引擎 API 参考（engine/engine.h）
@@ -61,8 +61,8 @@ shots/    测试截图
 - `bg_tile(x,y,t)`、`bg_tiles(x,y,ptr,n)`、`bg_fill(x,y,w,h,t)`：写入 tile（会排队，x 范围 0..63）
 - `bg_attr(x,y,pal)`：设置 tile (x,y) 所在 16x16 区块的调色板
 - `bg_text(x,y,"TEXT")`、`bg_number(x,y,value,digits)`：显示文字和数字（tile 编号就是 ASCII 码）
-- `bg_load(map,w,h,attr)`：批量载入地图（**只能在场景 init 里调用**）
-- `bg_scroll(x)`：水平滚动
+- `bg_load(map,w,h,attr)`：批量载入一张不超过 64 列的原始地图（**只能在场景 init 里调用**）
+- `bg_scroll(x)`：水平滚动。关卡请用 `level_scroll`，它会在滚动的同时把新的一列写进 nametable
 
 **精灵**（每帧画之前会自动清空）
 - `spr(x,y,tile,attr)`：attr = 调色板 0..3 | `SPR_FLIPH` | `SPR_FLIPV` | `SPR_BEHIND`，超出屏幕的会被裁掉
@@ -78,6 +78,8 @@ shots/    测试截图
 **物理**：`aabb(ax,ay,aw,ah,bx,by,bw,bh)`，`tm_bind(map,w,h,flags)`，`tm_flags_at(px,py)`（返回 `TF_SOLID`，地图左右和上方之外都算实心），`rnd()`。全局变量 `frame_count`。
 
 **实体**：`entities.txt` 定义类型，地图末尾的 `entities:` 放实例。生成的表每条 12 字节（类型、x 低/高、y、4 个小端 u16 属性），一张图最多 32 个。`ent_ptr`、`ent_type`、`ent_x`、`ent_y`、`ent_prop(p, n)` 读一条记录，`ent_find` 找第一种类型（找不到返回 255）。引擎不跑实体逻辑，每个游戏自己解释这些数。
+
+**关卡**：`games/<游戏>/maps/order.txt` 一行一个地图名，顺序就是关卡号。`level_load(n)` 载入第 n 关（从 0 起），`level_count` / `level_current` / `level_cols` / `level_music` / `level_ents` / `level_ent_n` 读当前关。`level_scroll(像素)` 让两屏宽的 nametable 跟着相机走。`tm_flags_at` 在关卡载入后按世界坐标查碰撞，不用把整张图解进 RAM。每关可以在地图第一行写 `music 歌名`，编号是 `songs.txt` 里 `song` 的顺序。`test_level`（255 表示不用）和 `test_cam`（65535 表示不用）给截图用；SDL 读 `RETRO_LEVEL` 和 `RETRO_CAM`。
 
 ## 音频
 
@@ -190,9 +192,11 @@ PC 上只听某一首、并且游戏里的 `music_play` 都改播它：`RETRO_MU
 ## 一步一步做一个新游戏
 1. `mkdir games/mygame`
 2. 画 tile 表 `tiles.png`：宽 128，高不超过 128，共 16x16 个 8x8 tile，tile 编号按行排列。只能用 4 种灰度：黑=0、85 灰=1、170 灰=2、白=3，分别对应调色板里的颜色编号。字体放在 ASCII 码对应的位置；可以运行 `python3 tools/make_sheets.py breakout games/mygame/tiles.png` 生成一张带字体的起始图。
-3. 做地图（可选）：
-   - 文本格式 `level.txt`：
+3. 做地图（可选），放在 `games/mygame/maps/`：
+   - `order.txt` 决定关卡顺序，一行一个名字。
+   - 文本格式 `maps/level.txt`（高度必须是 30 行，宽度 1..512 列，编辑器里新建时按 32 列对齐）：
      ```
+     music play
      legend:
      ; 字符 tile 编号 [pal=N] [solid]
      . 0x20 pal=0
@@ -200,9 +204,10 @@ PC 上只听某一首、并且游戏里的 `music_play` 都改播它：`RETRO_MU
      map:
      ######....
      ```
-   - 或者用 Tiled 导出 CSV `level.csv`，再写一个配套的 `level.legend`（每行格式：`tile [pal=N] [solid]`）
-   - 生成的代码包括 `map_level[]`、`map_level_attr[]`、`map_level_flags[]`，以及 `MAP_LEVEL_W/H`
-   - 可选：`entities.txt` 定义类型，地图末尾加 `entities:` 放实例。见下面的「实体」。
+   - 第一行 `music 歌名` 可以不写。不写时，如果 `songs.txt` 里有 `play`，就用它。
+   - 编译时 `tools/mappack.py` 把每一列做成 RLE，生成 `maps.c` 里的 `Level` 表：压缩后的列、列索引、属性、碰撞标志、实体、宽高、音乐编号。编辑器里仍是明文格子。
+   - 可选：`entities.txt` 定义类型，地图末尾加 `entities:` 放实例。见上面的「实体」。
+   - `map2c.py` 仍能单独看一张不超过 64 列的明文地图，游戏构建走的是 `mappack.py`。
 4. 写 `songs.txt`，或者在 `music/` 里放 FamiStudio 文本导出（至少一首循环；`make` 会生成 `music.h`）。格式见上面的「音频」。
 5. 写 `game.c`：只 `#include "../../engine/engine.h"`、`"assets.h"` 和 `"music.h"`，实现场景、`game_boot()`、`game_autopilot()`。要背景音乐就在场景 `init` 里调用 `music_play(MUS_...)`。
 6. `make GAME=mygame pc`（以及 uefi、img、nes、gba、all）
@@ -211,18 +216,18 @@ PC 上只听某一首、并且游戏里的 `music_play` 都改播它：`RETRO_MU
 
 ## 添加一个新平台
 1. 帧缓冲类平台：复用 `render_soft.c`。平台层负责：`engine_init()` → 每 1/60 秒调用 `engine_frame(按键位掩码)` → `soft_compose(fb)` → 显示。音频读 `soft_period[4]`、`soft_vol[4]`、`soft_duty[4]`（已经是 NES 定时器数值）。
-2. tile 硬件类平台（GB、SMS、PCE…）：照着 `render_nes.c` 实现 `backend.h` 里的函数（`r_init r_palette r_tiles r_attr r_scroll r_bulk_begin/end r_oam snd_hw`）。`snd_hw` 收到 4 个 `SndCh`。
+2. tile 硬件类平台（GB、SMS、PCE…）：照着 `render_nes.c` 实现 `backend.h` 里的函数（`r_init r_palette r_tiles r_column r_attr r_scroll r_bulk_begin/end r_in_bulk r_oam snd_hw`）。`r_column` 按列写 nametable（NES 上长度字节的最高位表示纵向 +32）。`r_in_bulk` 告诉 `level_load` 现在是不是已经在整屏上传里，避免提前结束。`snd_hw` 收到 4 个 `SndCh`。
 3. 在 Makefile 里加一个 target，把 `engine/engine.c`、`games/$(GAME)/game.c` 和生成的资源编进去。
 
 ## 资源流程
 `tools/build_assets.py games/<g> build/<g>/gen` 会生成：
 - `game.chr`：8KB 的 NES 图案表（ca65 通过 `.incbin` 引入）
 - `tiles.c`：`chr_tiles[4096]`，内容和 CHR 一样，给软件渲染器用
-- `maps.c` 和 `assets.h`：地图、属性表、碰撞标志、实体表，以及 `game_palette` 的声明
+- `maps.c` 和 `assets.h`：关卡表（列 RLE、列索引、属性、碰撞标志、实体、音乐编号），以及 `game_palette` 的声明
 - `palette.c`：`game_palette[32]`，从 `palette.txt` 来
 - `tiles_gba.c`：`gba_tiles[8192]`，同一张图的 GBA 4bpp（每 tile 32 字节，低 nibble 是左边的像素）
 
-所以每个游戏只有一份图形源（`tiles.png`）、一份调色板（`palette.txt`）和一份地图源，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会把 `songs.txt` 和 `music/*.fms.txt` 编成 `music.c`。
+所以每个游戏只有一份图形源（`tiles.png`）、一份调色板（`palette.txt`）和 `maps/` 里的关卡，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会把 `songs.txt` 和 `music/*.fms.txt` 编成 `music.c`。链接完会打印一行 `rom pc|uefi|gba|nes: ...`。NES 的 PRG 超过 32768 或这段 RAM 超过 768 时，`romusage.py` 以非 0 退出。ld65 自己报放不下时，Makefile 再打印：`错误：NES NROM 的 32KB PRG 放不下。这是 mapper 0，没有升级到 UxROM 或 MMC1。`
 
 地图文本可以在 `map:` 后面加可选的 `palmap:`，每格一位数字（0–3）。没有这一段时，调色板仍按 legend 里图块的 `pal=` 来，和以前的文件完全一样。同一 16×16 里如果出现两种非 0 调色板，采用先遇到的那个。
 
@@ -323,7 +328,7 @@ python3 editor/retro_editor.py
 
 GBA 的 L / R 没有接到引擎。
 
-Breakout：左右移动挡板，A 或 Start 发球。Platformer：左右跑动，A 跳跃（按得越久跳得越高），踩敌人可以把它消灭，收集全部 6 枚金币就胜利，掉进坑里会损失一条命。
+Breakout：左右移动挡板，A 或 Start 发球。Platformer：左右跑动，A 跳跃（按得越久跳得越高），踩敌人可以把它消灭。收集当前关的全部硬币，或者碰到终点，就进入下一关；最后一关之后是胜利画面。掉进坑里会损失一条命。分数和命数跨关保留。相机跟着玩家。第一关是原来的 64 列地图；后面有一关普通宽度的图，还有一关 256 列（8 屏）的长图。
 
 ## GBA 画面
 
@@ -361,7 +366,10 @@ make UEFI_LIBDIRS=/path/to/lib UEFI_INCDIR=/path/to/include/efi GAME=breakout ue
 - NES 每条扫描线最多 8 个精灵，背景色块是 16x16；fceux 默认会裁掉画面最上和最下各 8 行（屏幕顶部的 HUD 会被切掉一部分）。
 - 软件渲染器的 RGB 调色板和 fceux 的不完全一样，颜色会略有差异。
 - 修改背景 tile 不会自动更新碰撞地图（`tm_bind` 绑定的是 ROM 里的地图）。
-- 只支持水平滚动，最多两屏（512 像素）。GBA 以外的平台没有画面分割，所以滚动场景的 HUD 要用精灵来画。GBA 额外把地图最上面两行钉在屏幕顶部，见上面的「GBA 画面」。
+- 只支持水平滚动。nametable 始终是两屏（64 列）。比这更宽的地图按列流进去：世界第 c 列画在 nametable 的 `c & 63`，滚动值是 `相机 & 511`。玩家大约每 5 帧走出新的一列。一列是 30 个 tile 加 8 个属性字节，排队大约 65 字节，在每帧约 96 字节的 vblank 预算里。PC、UEFI 和 GBA 用同一套窗口。竖直方向仍是 30 行。格式上限 512 列。`fx` 是 12.4 有符号数，实用上玩家坐标到 2047 像素，所以示例长关是 256 列（2048 像素）。GBA 以外的平台没有画面分割，所以滚动场景的 HUD 要用精灵来画。GBA 额外把地图最上面两行钉在屏幕顶部，见上面的「GBA 画面」。
 - GBA 不写入任天堂 Logo，真机原装 BIOS 会停在启动画面；模拟器和烧录卡上自带的 BIOS 替换一般能过。噪声音高是近似值。L/R 未使用。
-- 实体表只负责摆放和属性。Platformer 读玩家起点、全部硬币，以及**第一只**敌人的 `left`/`right` 巡逻范围；多放的敌人会进表，但游戏不会动它们。Breakout 的挡板位置来自 `paddle`，球的待机位置是相对挡板的有符号 8 位偏移（默认 +12, −8）。标题画面上的装饰精灵仍写在 `game.c` 里。y 只到 255。一张图最多 32 个实体、每种类型最多 4 个属性。
+- 实体表只负责摆放和属性。Platformer 读玩家起点、全部硬币、终点，以及靠近相机的敌人（最多 4 个槽，用 `left`/`right` 巡逻）。离开相机一段距离后槽会空出来，后面的敌人再进来。Breakout 的挡板位置来自 `paddle`，球的待机位置是相对挡板的有符号 8 位偏移（默认 +12, −8）。标题画面上的装饰精灵仍写在 `game.c` 里。y 只到 255。一张图最多 32 个实体、每种类型最多 4 个属性。
+- 列压缩是按列的 RLE，不是 16×16 metatile。一列固定 30 字节：`0nnnnnnn` 后面跟 n 个原样 tile（n 为 1..127），`1nnnnnnn` 后面跟一个 tile、重复 n 次（n 为 2..127）。每关另有一张 `u16` 列索引（长度是列数 + 1）指向这块数据。属性字节是编译时算好的，不在运行时重算。碰撞用这条索引走到那一列，再查 256 字节的标志表。RLE 块超过 65535 字节会报错。
+- 换关时 `level_load` 会关画面，把可见的 64 列直接写进 PPU。NES 上这一步大约二十帧。流进新列的上传在游戏帧里排队，由 NMI 在 vblank 写完再改滚动。
+- 没有把 NROM 升级到 UxROM 或 MMC1。32KB PRG 放不下时构建失败，需要删内容或以后单独做换 bank。
 - 地图的调色板按图块记在 legend 里；同一图块要在不同格子用不同调色板时，才写出 `palmap:`。试听用的合成器和 SDL 那一版一致，不是 NES APU 的逐周期模拟。音乐撤销覆盖音符、行、循环、速度和曲目列表，不记录试听播放本身。

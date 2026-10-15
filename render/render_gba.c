@@ -135,6 +135,11 @@ void r_tiles(u8 x, u8 y, const u8 *t, u8 n){
     x++; t++;
   }
 }
+void r_column(u8 x, const u8 *t, u8 rows){
+  u8 y;
+  if(x >= 64) return;
+  for(y = 0; y < rows && y < 30; y++){ nt[y][x] = t[y]; poke(x, y); }
+}
 void r_attr(u8 page, u8 idx, u8 v){
   u8 tx, ty, x, y;
   page = (u8)(page & 1);
@@ -148,6 +153,7 @@ void r_attr(u8 page, u8 idx, u8 v){
 void r_scroll(u16 x){ scroll_x = (u16)(x & 511); }
 void r_bulk_begin(void){}
 void r_bulk_end(void){}
+u8 r_in_bulk(void){ return 0; }
 u8 *r_oam(void){ return oam; }
 
 static void pick_view(void){

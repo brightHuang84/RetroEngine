@@ -18,6 +18,7 @@ import re_build
 import map2c
 import txt2mus
 import ent2c
+import mappack
 
 BREAKOUT_PAL = [
     0x0F, 0x16, 0x26, 0x06, 0x0F, 0x27, 0x37, 0x17, 0x0F, 0x2A, 0x3A, 0x1A, 0x0F, 0x10, 0x00, 0x30,
@@ -66,14 +67,14 @@ class RoundTrip(unittest.TestCase):
 
     def test_map2c_matches_golden(self):
         for src, name, golden in (
-            ('games/breakout/play.txt', 'play', 'editor/tests/golden/play.c'),
-            ('games/platformer/level.txt', 'level', 'editor/tests/golden/level.c'),
+            ('games/breakout/maps/play.txt', 'play', 'editor/tests/golden/play.c'),
+            ('games/platformer/maps/level1.txt', 'level', 'editor/tests/golden/level.c'),
         ):
             got = map2c_text(src, name)
             self.assertEqual(got, open(golden).read())
 
     def test_editor_map_emit_matches_map2c(self):
-        for path, name in (('games/breakout/play.txt', 'play'), ('games/platformer/level.txt', 'level')):
+        for path, name in (('games/breakout/maps/play.txt', 'play'), ('games/platformer/maps/level1.txt', 'level')):
             gm = re_data.load_map(path)
             fd, tmp = tempfile.mkstemp(suffix='.txt')
             os.close(fd)
@@ -84,16 +85,16 @@ class RoundTrip(unittest.TestCase):
                 os.remove(tmp)
 
     def test_attribute_helper_matches_map2c(self):
-        tiles, pal, _solid, _pm = map2c.load('games/platformer/level.txt')
+        tiles, pal, _solid, _pm = map2c.load('games/platformer/maps/level1.txt')
         h, w = len(tiles), len(tiles[0])
         attrs = re_data.attribute_bytes(w, h, lambda x, y: pal.get(tiles[y][x], 0))
-        text = map2c_text('games/platformer/level.txt', 'level')
+        text = map2c_text('games/platformer/maps/level1.txt', 'level')
         line = [ln for ln in text.splitlines() if ln.startswith('const unsigned char map_level_attr')][0]
         nums = [int(n) for n in line.split('{', 1)[1].split('}')[0].split(',') if n]
         self.assertEqual(attrs, nums)
 
     def test_paint_fills_the_attribute_block(self):
-        gm = re_data.load_map('games/breakout/play.txt')
+        gm = re_data.load_map('games/breakout/maps/play.txt')
         gm.paint(4, 4, 0x82, 1, True)
         for dy in (0, 1):
             for dx in (0, 1):
@@ -112,13 +113,13 @@ class RoundTrip(unittest.TestCase):
             os.remove(tmp)
 
     def test_uniform_palmap_matches_legend(self):
-        gm = re_data.load_map('games/breakout/play.txt')
+        gm = re_data.load_map('games/breakout/maps/play.txt')
         gm.override = [[gm.effective_pal(x, y) for x in range(gm.w)] for y in range(gm.h)]
         fd, tmp = tempfile.mkstemp(suffix='.txt')
         os.close(fd)
         try:
             open(tmp, 'w').write(gm.emit())
-            self.assertEqual(body(map2c_text('games/breakout/play.txt', 'play')), body(map2c_text(tmp, 'play')))
+            self.assertEqual(body(map2c_text('games/breakout/maps/play.txt', 'play')), body(map2c_text(tmp, 'play')))
         finally:
             os.remove(tmp)
 
@@ -198,7 +199,8 @@ class RoundTrip(unittest.TestCase):
             spec = ent2c.load_types('games/%s/entities.txt' % game)
             self.assertGreater(len(spec.types), 0)
             self.assertLessEqual(spec.limit, ent2c.ENT_ABS_MAX)
-            gm = re_data.load_map('games/%s/%s.txt' % (game, 'level' if game == 'platformer' else 'play'))
+            gm = re_data.load_map('games/%s/maps/%s.txt' % (
+                game, 'level1' if game == 'platformer' else 'play'))
             by_type = {}
             for ent in gm.entities:
                 by_type.setdefault(ent.type, ent)
@@ -236,6 +238,148 @@ class RoundTrip(unittest.TestCase):
     def test_missing_tool_hint(self):
         tips = re_build.hints_for('pc: sdl2-config not found (install libsdl2-dev)')
         self.assertTrue(any('libsdl2-dev' in tip for tip in tips))
+        tips = re_build.hints_for('错误：NES NROM 的 32KB PRG 放不下。')
+        self.assertTrue(tips)
+
+    def test_column_rle_roundtrip_and_level_order(self):
+        tiles, pal, _solid, palmap = map2c.load('games/platformer/maps/long.txt')
+        cols = [[tiles[y][x] for y in range(len(tiles))] for x in range(len(tiles[0]))]
+        self.assertEqual(len(cols), 256)
+        self.assertEqual(len(tiles), 30)
+        for col in cols:
+            blob = mappack.rle_encode(col)
+            self.assertEqual(mappack.rle_decode(blob, 30), col)
+        text = mappack.emit('games/platformer')
+        self.assertIn('game_level_count(void){ return 3; }', text)
+        self.assertIn('map_level1_ent', text)
+        self.assertIn('256, 30', text)
+        attrs = map2c.attribute_bytes(tiles, pal, palmap)
+        level_tiles, level_pal, _s, _pm = map2c.load('games/platformer/maps/level1.txt')
+        level_attrs = map2c.attribute_bytes(level_tiles, level_pal, None)
+        golden = open('editor/tests/golden/level.c').read()
+        line = [ln for ln in golden.splitlines() if ln.startswith('const unsigned char map_level_attr')][0]
+        nums = [int(n) for n in line.split('{', 1)[1].split('}')[0].split(',') if n]
+        self.assertEqual(level_attrs, nums)
+        self.assertEqual(len(attrs), (256 // 32) * 64)
+        names = mappack.read_order('games/platformer')
+        self.assertEqual(names, ['level1', 'level2', 'long'])
+        self.assertEqual(mappack.read_order('games/breakout'), ['play'])
+
+    def test_overwide_map_is_an_error(self):
+        folder = tempfile.mkdtemp()
+        try:
+            game = os.path.join(folder, 'wide')
+            os.makedirs(os.path.join(game, 'maps'))
+            rows = ['.' * 513 for _ in range(30)]
+            open(os.path.join(game, 'maps', 'big.txt'), 'w').write(
+                'legend:\n. 0x20 pal=0\nmap:\n' + '\n'.join(rows) + '\n')
+            open(os.path.join(game, 'maps', 'order.txt'), 'w').write('big\n')
+            open(os.path.join(game, 'songs.txt'), 'w').write('song play\ntempo 120\n')
+            with self.assertRaises(SystemExit):
+                mappack.emit(game)
+            short = ['.' * 32 for _ in range(20)]
+            open(os.path.join(game, 'maps', 'big.txt'), 'w').write(
+                'legend:\n. 0x20 pal=0\nmap:\n' + '\n'.join(short) + '\n')
+            with self.assertRaises(SystemExit):
+                mappack.emit(game)
+        finally:
+            shutil.rmtree(folder)
+
+    def test_map_list_create_rename_duplicate_reorder_delete(self):
+        folder = tempfile.mkdtemp()
+        try:
+            root = re_data.create_project(folder, 'blank', None)
+            project = re_data.Project(root)
+            self.assertEqual([m.name for m in project.maps], ['level'])
+            project.add_map('second', 128, project.maps[0])
+            project.duplicate_map('level')
+            self.assertEqual([m.name for m in project.maps], ['level', 'level_copy', 'second'])
+            self.assertEqual(project.map_by_name('second').w, 128)
+            self.assertEqual(project.map_by_name('second').h, 30)
+            project.move_map('second', -1)
+            self.assertEqual(project.maps[1].name, 'second')
+            project.rename_map('second', 'renamed')
+            self.assertIsNone(next((m for m in project.maps if m.name == 'second'), None))
+            self.assertEqual(project.map_by_name('renamed').w, 128)
+            with self.assertRaises(ValueError):
+                project.add_map('renamed', 64, None)
+            with self.assertRaises(ValueError):
+                project.add_map('bad-name', 64, None)
+            with self.assertRaises(ValueError):
+                project.add_map('wide', 40, None)
+            with self.assertRaises(ValueError):
+                project.add_map('too', 544, None)
+            project.delete_map('level_copy')
+            self.assertEqual([m.name for m in project.maps], ['level', 'renamed'])
+            project.delete_map('level')
+            with self.assertRaises(ValueError):
+                project.delete_map('renamed')
+            self.assertEqual([m.name for m in project.maps], ['renamed'])
+            project.save()
+            again = re_data.Project(root)
+            self.assertEqual([m.name for m in again.maps], ['renamed'])
+            self.assertEqual(again.map_by_name('renamed').w, 128)
+            self.assertFalse(os.path.exists(os.path.join(root, 'maps', 'level.txt')))
+            # long map still edits one cell without touching the others
+            long_map = re_data.load_map('games/platformer/maps/long.txt')
+            before = long_map.tile_at(10, 10)
+            long_map.place(10, 10, 0x85, 2)
+            self.assertEqual(long_map.tile_at(10, 10), 0x85)
+            self.assertEqual(long_map.w, 256)
+            state = long_map.copy_state()
+            long_map.place(10, 10, before, 0)
+            long_map.restore_state(state)
+            self.assertEqual(long_map.tile_at(10, 10), 0x85)
+        finally:
+            shutil.rmtree(folder)
+
+    def test_stream_window_matches_the_long_map(self):
+        tiles, pal, _solid, _palmap = map2c.load('games/platformer/maps/long.txt')
+        w = len(tiles[0])
+        cols = [[tiles[y][x] for y in range(30)] for x in range(w)]
+        attrs = map2c.attribute_bytes(tiles, pal, None)
+        nt = [[0] * 64 for _ in range(30)]
+        at = [[0] * 64 for _ in range(2)]
+
+        def paint(c):
+            x = c & 63
+            for y in range(30):
+                nt[y][x] = cols[c][y]
+            page = (c & 63) >> 5
+            for ay in range(8):
+                idx = ay * 8 + ((c & 31) >> 2)
+                at[page][idx] = attrs[(c >> 5) * 64 + idx]
+
+        right = min(63, w - 1)
+        for c in range(right + 1):
+            paint(c)
+        max_cam = (w - 32) * 8
+        for cam in list(range(0, max_cam + 1, 3)) + list(range(max_cam, -1, -5)):
+            need_l = cam >> 3
+            need_r = min(w - 1, (cam + 255) >> 3)
+            win_l = right - 63 if right >= 63 else 0
+            if need_l >= win_l and need_r <= right:
+                pass
+            elif need_r > right and need_r - right <= 2:
+                while right < need_r:
+                    right += 1
+                    paint(right)
+            elif right > need_l + 63 and right - (need_l + 63) <= 2:
+                while need_l + 63 < right:
+                    paint(right - 64)
+                    right -= 1
+            else:
+                start = need_r - 63 if need_r >= 63 else 0
+                for c in range(start, need_r + 1):
+                    paint(c)
+                right = need_r
+            scroll = cam & 511
+            for x in (0, 64, 128, 200, 248):
+                world = (cam + x) >> 3
+                nt_x = ((x + scroll) & 511) >> 3
+                self.assertEqual(nt[26][nt_x], cols[world][26])
+                idx = (26 >> 2) * 8 + ((nt_x & 31) >> 2)
+                self.assertEqual(at[nt_x >> 5][idx], attrs[(world >> 5) * 64 + idx])
 
 
 if __name__ == '__main__':

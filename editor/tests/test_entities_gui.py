@@ -76,7 +76,7 @@ def main():
     window.project.dirty['songs'] = False
     window.tabs.setCurrentIndex(2)
 
-    level = os.path.join(ROOT, 'games', 'platformer', 'level.txt')
+    level = os.path.join(ROOT, 'games', 'platformer', 'maps', 'level1.txt')
     backup = open(level, 'rb').read()
     binary = os.path.join(ROOT, 'build', 'platformer', 'pc', 'platformer')
     subprocess.check_call(['make', 'GAME=platformer', 'pc'])
@@ -85,8 +85,8 @@ def main():
     try:
         tab = window.map_tab
         m = tab.current()
-        if m.name != 'level':
-            raise SystemExit('expected level map, got %s' % m.name)
+        if m.name != 'level1':
+            raise SystemExit('expected level1 map, got %s' % m.name)
         before = len(m.entities)
         for i in range(tab.type_list.count()):
             if tab.type_list.item(i).data(Qt.ItemDataRole.UserRole) == 'coin':

@@ -1,3 +1,4 @@
+music play
 legend:
 . 0x20 pal=3
 # 0x82 pal=3 solid

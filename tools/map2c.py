@@ -43,17 +43,11 @@ def load(path):
         if len(palmap) != len(tiles) or any(len(r) != len(tiles[0]) for r in palmap):
             raise SystemExit('%s: palmap size does not match the map' % path)
     return tiles, pal, solid, palmap
-def main(path, name):
-    tiles, pal, solid, palmap = load(path)
+def attribute_bytes(tiles, pal, palmap):
+    """64 NES attribute bytes per 32-column page. First non-zero palette in each 2x2 wins."""
     h = len(tiles); w = len(tiles[0])
-    assert all(len(r) == w for r in tiles), "ragged map"
-    assert w <= 64 and h <= 30
-    out = ['/* GENERATED from %s by tools/map2c.py */' % path,
-           '#define MAP_%s_W %d' % (name.upper(), w), '#define MAP_%s_H %d' % (name.upper(), h)]
-    out.append('const unsigned char map_%s[%d] = {' % (name, w * h))
-    for r in tiles: out.append(','.join(str(t) for t in r) + ',')
-    out.append('};')
-    pages = (w + 31) // 32; at = []
+    pages = (w + 31) // 32
+    at = []
     for pg in range(pages):
         for ay in range(8):
             for ax in range(8):
@@ -69,8 +63,22 @@ def main(path, name):
                                     if v: p = p or v
                     b |= (p & 3) << (q * 2)
                 at.append(b)
+    return at
+def flag_bytes(solid):
+    return [1 if t in solid else 0 for t in range(256)]
+def main(path, name):
+    tiles, pal, solid, palmap = load(path)
+    h = len(tiles); w = len(tiles[0])
+    assert all(len(r) == w for r in tiles), "ragged map"
+    assert w <= 64 and h <= 30
+    out = ['/* GENERATED from %s by tools/map2c.py */' % path,
+           '#define MAP_%s_W %d' % (name.upper(), w), '#define MAP_%s_H %d' % (name.upper(), h)]
+    out.append('const unsigned char map_%s[%d] = {' % (name, w * h))
+    for r in tiles: out.append(','.join(str(t) for t in r) + ',')
+    out.append('};')
+    at = attribute_bytes(tiles, pal, palmap)
     out.append('const unsigned char map_%s_attr[%d] = {%s};' % (name, len(at), ','.join(str(v) for v in at)))
-    fl = [1 if t in solid else 0 for t in range(256)]
+    fl = flag_bytes(solid)
     out.append('const unsigned char map_%s_flags[256] = {%s};' % (name, ','.join(str(v) for v in fl)))
     print('\n'.join(out))
 if __name__ == '__main__': main(sys.argv[1], sys.argv[2])

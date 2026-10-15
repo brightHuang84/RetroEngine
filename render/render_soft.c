@@ -16,10 +16,16 @@ static const uint32_t nes_rgb[64] = {
 void r_init(void){ int x, y; for(y = 0; y < BG_H; y++) for(x = 0; x < BG_W; x++) nt[y][x] = ' '; for(x = 0; x < 256; x++) oam[x] = 0xF0; }
 void r_palette(const u8 *p){ int i; for(i = 0; i < 32; i++) pal[i] = p[i] & 63; }
 void r_tiles(u8 x, u8 y, const u8 *t, u8 n){ while(n--){ if(x < BG_W && y < BG_H) nt[y][x] = *t; x++; t++; } }
+void r_column(u8 x, const u8 *t, u8 rows){
+  u8 y;
+  if(x >= BG_W) return;
+  for(y = 0; y < rows && y < BG_H; y++) nt[y][x] = t[y];
+}
 void r_attr(u8 page, u8 idx, u8 v){ at[page & 1][idx & 63] = v; }
 void r_scroll(u16 x){ scroll = x & 511; }
 void r_bulk_begin(void){}
 void r_bulk_end(void){}
+u8 r_in_bulk(void){ return 0; }
 u8 *r_oam(void){ return oam; }
 void snd_hw(const SndCh *ch){
   u8 i;

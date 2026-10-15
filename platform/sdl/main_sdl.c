@@ -4,6 +4,8 @@
    RETRO_WAV=<path>: write one 60Hz frame of mixed audio (44100 Hz mono s16) per engine tick.
    RETRO_MUS=<id>: lock playback to that song id (music_play from the game is redirected).
    RETRO_FRAMES=<n>: exit after n engine frames.
+   RETRO_LEVEL=<n>: play scene loads level n (255 or unset = level 0).
+   RETRO_CAM=<px>: play scene places the camera at this pixel (65535 or unset = follow).
    With RETRO_WAV set, the audio device is left closed so the file is the only consumer of the mixer. */
 #include <SDL2/SDL.h>
 #include <stdio.h>
@@ -163,6 +165,8 @@ int main(int argc, char **argv){
   SDL_RenderSetLogicalSize(r, SCREEN_W, SCREEN_H);
   t = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SCREEN_W, SCREEN_H);
   if(mus) music_lock((u8)atoi(mus));
+  if(getenv("RETRO_LEVEL")) test_level = (u8)atoi(getenv("RETRO_LEVEL"));
+  if(getenv("RETRO_CAM")) test_cam = (u16)atoi(getenv("RETRO_CAM"));
   engine_init();
   freq = SDL_GetPerformanceFrequency(); step = freq / 60; prev = SDL_GetPerformanceCounter();
   while(run){

@@ -10,6 +10,7 @@ build/
 # cc65-generated assembly. Hand-written sources are the platform crt0 files.
 *.s
 !platform/nes/crt0.s
+!platform/nes/upload.s
 !platform/gba/crt0.s
 
 # Asset-pipeline outputs (normally build/<game>/gen/)
