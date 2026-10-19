@@ -111,13 +111,17 @@ def tile_image(tiles, index, palette, scale, backdrop=None):
     return img
 
 
-def sheet_image(tiles, palette, cell, backdrop=None):
+def sheet_image(tiles, palette, cell, backdrop=None, page=0):
     img = QImage(16 * cell, 16 * cell, QImage.Format_RGB32)
     img.fill(QColor('#111111'))
     painter = QPainter(img)
     scale = max(1, (cell - 1) // 8)
-    for i in range(min(256, tiles.count())):
-        sub = tile_image(tiles, i, palette, scale, backdrop)
+    base = (page or 0) * 256
+    for i in range(256):
+        idx = base + i
+        if idx >= tiles.count():
+            break
+        sub = tile_image(tiles, idx, palette, scale, backdrop)
         painter.drawImage((i % 16) * cell + 1, (i // 16) * cell + 1, sub)
     painter.end()
     return img
@@ -135,7 +139,7 @@ def blit_sprite_tile(img, tiles, palette, pal, tile, wx, wy, scale):
             fill_rect(img, (wx + x) * scale, (wy + y) * scale, scale, scale, data.rgb_of(group[v]))
 
 
-def draw_map_entities(img, project, game_map, scale):
+def draw_map_entities(img, project, game_map, scale, page=0):
     spec = getattr(project, 'entity_spec', None)
     if spec is None:
         return
@@ -144,7 +148,8 @@ def draw_map_entities(img, project, game_map, scale):
         if et is None:
             continue
         for dx, dy, tile in et.sprites:
-            blit_sprite_tile(img, project.tiles, project.palette, et.pal, tile,
+            blit_sprite_tile(img, project.tiles, project.palette, et.pal,
+                             page * 256 + (tile & 255),
                              int(ent.x) + dx, int(ent.y) + dy, scale)
 
 
@@ -163,6 +168,8 @@ def entity_icon(project, et, scale=3):
 
 def map_image(project, game_map, scale, grid=True, screens=True, conflicts=True, selected=None):
     w, h = game_map.w, game_map.h
+    page = getattr(game_map, 'tileset', 0) or 0
+    exattr = bool(getattr(project, 'exattr', False))
     attrs = data.attribute_bytes(w, h, game_map.effective_pal)
     img = QImage(max(1, w * 8 * scale), max(1, h * 8 * scale), QImage.Format_RGB32)
     pal = project.palette
@@ -170,18 +177,21 @@ def map_image(project, game_map, scale, grid=True, screens=True, conflicts=True,
     for ty in range(h):
         for tx in range(w):
             tile = game_map.tile_at(tx, ty)
-            p = data.resolved_palette(tx, ty, attrs)
+            if exattr:
+                p = game_map.effective_pal(tx, ty)
+            else:
+                p = data.resolved_palette(tx, ty, attrs)
             group = pal[p * 4:p * 4 + 4]
             for py in range(8):
                 for px in range(8):
-                    v = project.tiles.tile_get(tile, px, py)
+                    v = project.tiles.tile_get(page * 256 + (tile & 255), px, py)
                     rgb = data.rgb_of(backdrop if v == 0 else group[v])
                     fill_rect(img, (tx * 8 + px) * scale, (ty * 8 + py) * scale, scale, scale, rgb)
-    draw_map_entities(img, project, game_map, scale)
+    draw_map_entities(img, project, game_map, scale, page)
     painter = QPainter(img)
     if grid:
         painter.setPen(QPen(QColor(255, 255, 255, 50)))
-        step = 16 * scale
+        step = (8 if exattr else 16) * scale
         for x in range(0, img.width(), step):
             painter.drawLine(x, 0, x, img.height())
         for y in range(0, img.height(), step):
@@ -196,6 +206,8 @@ def map_image(project, game_map, scale, grid=True, screens=True, conflicts=True,
     if conflicts:
         painter.setPen(QPen(QColor('#ff4040'), 2))
         for x, y, _pals in data.attribute_conflicts(w, h, game_map.effective_pal):
+            if exattr and x < 32:
+                continue
             painter.drawRect(x * 8 * scale, y * 8 * scale, 16 * scale - 1, 16 * scale - 1)
     if selected is not None and 0 <= selected < len(game_map.entities):
         ent = game_map.entities[selected]
@@ -259,6 +271,7 @@ class TileTab(QWidget):
         self.window = window
         self.project = None
         self.index = 0
+        self.page = 0
         self.pen = 1
         self.pal_index = 0
         self.clip = None
@@ -292,6 +305,16 @@ class TileTab(QWidget):
         right.addLayout(pens)
         right.addWidget(QLabel('预览用的调色板'))
         right.addWidget(self.pal_box)
+        page_row = QHBoxLayout()
+        page_row.addWidget(QLabel('CHR 页'))
+        self.page_box = QComboBox()
+        self.page_box.currentIndexChanged.connect(self._page_changed)
+        page_row.addWidget(self.page_box, 1)
+        add_page = QPushButton('加一页')
+        add_page.clicked.connect(self._add_page)
+        page_row.addWidget(add_page)
+        right.addLayout(page_row)
+        right.addWidget(QLabel('一页 256 个图块。地图用「图块页」选择这一关用哪一页。'))
         row = QHBoxLayout()
         for text, slot in (('复制', self.copy_tile), ('粘贴', self.paste_tile),
                            ('水平翻转', self.flip_h), ('垂直翻转', self.flip_v)):
@@ -318,9 +341,13 @@ class TileTab(QWidget):
     def refresh(self):
         if not self.project:
             return
-        self.picker.setPixmap(QPixmap_from(sheet_image(self.project.tiles, self.preview_colors(), 18)))
+        self._sync_pages()
+        self.picker.setPixmap(QPixmap_from(sheet_image(
+            self.project.tiles, self.preview_colors(), 18, page=self.page)))
         self.picker.resize(self.picker.pixmap().size())
-        self.info.setText('图块 $%02X（第 %d 号）  笔：色 %d' % (self.index, self.index, self.pen))
+        local = self.index & 255
+        self.info.setText('图块 $%02X（第 %d 页的第 %d 号）  笔：色 %d' % (
+            local, self.page, local, self.pen))
         self.sync_pen_buttons()
         self.canvas.update()
 
@@ -340,6 +367,41 @@ class TileTab(QWidget):
         self.pal_index = idx
         self.refresh()
 
+    def _sync_pages(self):
+        pages = self.project.tiles.pages()
+        if self.page >= pages:
+            self.page = pages - 1
+        self.page_box.blockSignals(True)
+        if self.page_box.count() != pages:
+            self.page_box.clear()
+            for i in range(pages):
+                self.page_box.addItem('第 %d 页' % i, i)
+        self.page_box.setCurrentIndex(self.page)
+        self.page_box.blockSignals(False)
+
+    def _page_changed(self, idx):
+        if idx < 0:
+            return
+        self.page = idx
+        self.index = self.page * 256 + (self.index & 255)
+        if self.index >= self.project.tiles.count():
+            self.index = self.page * 256
+        self.refresh()
+
+    def _add_page(self):
+        if not self.project:
+            return
+        try:
+            self.project.tiles.add_page()
+        except ValueError as exc:
+            QMessageBox.warning(self, '图块', str(exc))
+            return
+        self.project.dirty['tiles'] = True
+        self.page = self.project.tiles.pages() - 1
+        self.index = self.page * 256
+        self.refresh()
+        self.window.touch()
+
     def _pick(self, event):
         cell = 18
         x = int(event.position().x()) // cell
@@ -348,7 +410,7 @@ class TileTab(QWidget):
             self.select_tile(y * 16 + x)
 
     def select_tile(self, index):
-        self.index = index & 255
+        self.index = self.page * 256 + (index & 255)
         self.refresh()
 
     def begin_stroke(self):
@@ -597,6 +659,10 @@ class MapTab(QWidget):
         self.music_box.currentIndexChanged.connect(self._music_changed)
         side.addWidget(QLabel('本关音乐'))
         side.addWidget(self.music_box)
+        self.tileset_box = QComboBox()
+        self.tileset_box.currentIndexChanged.connect(self._tileset_changed)
+        side.addWidget(QLabel('图块页'))
+        side.addWidget(self.tileset_box)
         self.mode_box = QComboBox()
         self.mode_box.addItem('图块')
         self.mode_box.addItem('实体')
@@ -701,6 +767,7 @@ class MapTab(QWidget):
                 self.map_box.setCurrentIndex(idx)
         self.map_box.blockSignals(False)
         self._fill_music()
+        self._fill_tileset()
 
     def _fill_music(self):
         self.music_box.blockSignals(True)
@@ -716,6 +783,32 @@ class MapTab(QWidget):
             if idx >= 0:
                 self.music_box.setCurrentIndex(idx)
         self.music_box.blockSignals(False)
+
+    def _fill_tileset(self):
+        pages = self.project.tiles.pages() if self.project else 1
+        self.tileset_box.blockSignals(True)
+        self.tileset_box.clear()
+        for i in range(pages):
+            self.tileset_box.addItem('第 %d 页' % i, i)
+        m = self.current()
+        if m:
+            idx = self.tileset_box.findData(m.tileset)
+            if idx >= 0:
+                self.tileset_box.setCurrentIndex(idx)
+        self.tileset_box.blockSignals(False)
+
+    def _tileset_changed(self, _idx):
+        m = self.current()
+        if not m or self.tileset_box.currentData() is None:
+            return
+        page = int(self.tileset_box.currentData())
+        if page == m.tileset:
+            return
+        self.hist.push(m.copy_state())
+        m.tileset = page
+        self.project.dirty['maps'] = True
+        self.refresh()
+        self.window.touch()
 
     def _music_changed(self, _i):
         m = self.current()
@@ -741,6 +834,7 @@ class MapTab(QWidget):
         if m and m.w > 64:
             self.zoom.setValue(1)
         self._fill_music()
+        self._fill_tileset()
         self.refresh()
 
     def _guard(self):
@@ -920,10 +1014,12 @@ class MapTab(QWidget):
     def refresh(self):
         if not self.project:
             return
-        group = self.project.palette[self.pal * 4:self.pal * 4 + 4]
-        self.picker.setPixmap(QPixmap_from(sheet_image(self.project.tiles, group, 16, self.project.palette[0])))
-        self.picker.resize(self.picker.pixmap().size())
         m = self.current()
+        group = self.project.palette[self.pal * 4:self.pal * 4 + 4]
+        page = m.tileset if m else 0
+        self.picker.setPixmap(QPixmap_from(sheet_image(
+            self.project.tiles, group, 16, self.project.palette[0], page)))
+        self.picker.resize(self.picker.pixmap().size())
         if not m:
             return
         sel = self.selected if self.mode == 'entity' else None
@@ -1806,6 +1902,17 @@ class BuildTab(QWidget):
         deps.clicked.connect(self.show_deps)
         row2.addWidget(deps)
         lay.addLayout(row2)
+        map_row = QHBoxLayout()
+        map_row.addWidget(QLabel('NES mapper'))
+        self.mapper_box = QComboBox()
+        self.mapper_box.addItem('MMC5（默认，128KB PRG/CHR，64KB WRAM）', 'mmc5')
+        self.mapper_box.addItem('NROM（32KB PRG + 8KB CHR）', 'nrom')
+        self.mapper_box.currentIndexChanged.connect(self._mapper_changed)
+        map_row.addWidget(self.mapper_box, 1)
+        lay.addLayout(map_row)
+        self.exattr = QCheckBox('ExRAM 扩展属性（每 8×8 一色，仅左 32 列，默认关）')
+        self.exattr.toggled.connect(self._exattr_changed)
+        lay.addWidget(self.exattr)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
@@ -1828,7 +1935,38 @@ class BuildTab(QWidget):
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
         self.proc.readyReadStandardOutput.connect(self._read)
         self.proc.finished.connect(self._finished)
-        self.proc.start('make', ['GAME=%s' % self.window.project.name, target])
+        self.proc.start('make', [
+            'GAME=%s' % self.window.project.name,
+            'NES_MAPPER=%s' % self.window.project.mapper,
+            target,
+        ])
+
+    def load(self, project):
+        idx = self.mapper_box.findData(project.mapper)
+        self.mapper_box.blockSignals(True)
+        self.exattr.blockSignals(True)
+        if idx >= 0:
+            self.mapper_box.setCurrentIndex(idx)
+        self.exattr.setChecked(bool(project.exattr))
+        self.mapper_box.blockSignals(False)
+        self.exattr.blockSignals(False)
+
+    def _mapper_changed(self, _i):
+        if not self.window.project:
+            return
+        name = self.mapper_box.currentData()
+        if name and name != self.window.project.mapper:
+            self.window.project.mapper = name
+            self.window.project.dirty['nes'] = True
+            self.window.touch()
+
+    def _exattr_changed(self, on):
+        if not self.window.project:
+            return
+        self.window.project.exattr = bool(on)
+        self.window.project.dirty['nes'] = True
+        self.window.map_tab.refresh()
+        self.window.touch()
 
     def _read(self):
         if self.proc:
@@ -2310,6 +2448,7 @@ class MainWindow(QMainWindow):
         self.music_tab.load(project)
         self.preview_tab.load(project)
         self.code_tab.load(project)
+        self.build_tab.load(project)
         self.touch()
 
     def new_project(self):

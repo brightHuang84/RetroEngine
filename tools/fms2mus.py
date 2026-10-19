@@ -7,7 +7,8 @@
 Files that are already songs.txt are copied through. FamiStudio text is
 flattened to frame-accurate `tN` durations so txt2mus.py can compile it.
 Square1/2, Triangle and Noise become pulse1/2, triangle and noise.
-Anything the engine cannot play is warned about and skipped, not fatal.
+MMC5Square1/2 become pulse3/4 (the expansion pulses). Other channels are
+warned about and skipped, not fatal.
 
 Timing: FamiStudio tempo stores note Time and Duration in frames when the
 groove is a single value (the usual case). A swing groove (two sizes) is
@@ -23,6 +24,7 @@ import sys
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 CHANS = {
     'Square1': 0, 'Square2': 1, 'Triangle': 2, 'Noise': 3,
+    'MMC5Square1': 4, 'MMC5Square2': 5,
 }
 PAD = {'Beginning': 0, 'Middle': 1, 'End': 2}
 ATTR = re.compile(r'([A-Za-z0-9_]+)\s*=\s*"((?:""|[^"])*)"')
@@ -457,7 +459,7 @@ def paint_song(song, instruments, warn):
             col_frames.append(spec['total'])
 
     channels_out = []
-    for ci in range(4):
+    for ci in range(6):
         chan = song['channels'].get(ci)
         # Collect speed changes (FT) across channels first; do it outside.
         channels_out.append(chan)
@@ -517,7 +519,7 @@ def paint_song(song, instruments, warn):
         cut = offsets[loop_at]
 
     rendered = []
-    for ci in range(4):
+    for ci in range(6):
         chan = song['channels'].get(ci)
         grid = ['R'] * total
         vols = []
@@ -607,7 +609,7 @@ def paint_song(song, instruments, warn):
                     for f in range(base + a, min(base + end, total)):
                         grid[f] = 'R'
         vol = most_common(vols, 10)
-        duty = most_common(duties, 2 if ci < 2 else 0)
+        duty = most_common(duties, 2 if ci not in (2, 3) else 0)
         if len(set(vols)) > 1:
             warn.say('vol-mix-%d' % ci, 'channel %d uses more than one volume; keeping %d' % (ci, vol))
         if ci != 2 and len(set(duties)) > 1:
@@ -661,7 +663,7 @@ def emit_song(ident, original, rendered, cut, lines):
     lines.append('# imported from FamiStudio song "%s"' % original)
     lines.append('song %s' % ident)
     lines.append('tempo 120')
-    cnames = ['pulse1', 'pulse2', 'triangle', 'noise']
+    cnames = ['pulse1', 'pulse2', 'triangle', 'noise', 'pulse3', 'pulse4']
     once = cut is None
     for ci, ch in enumerate(rendered):
         events = compress(ch['grid'])

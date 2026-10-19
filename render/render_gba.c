@@ -12,7 +12,7 @@
 #include "../platform/gba/gba.h"
 #include "../engine/backend.h"
 
-extern const u8 gba_tiles[8192];
+extern const u8 gba_tiles[];          /* one CHR page is 8192 bytes (256 tiles * 32) */
 
 static u8 nt[30][64];
 static u8 at[2][64];
@@ -21,6 +21,10 @@ static u16 hw[2][1024];          /* screenblocks 8 and 9, hardware order */
 static u16 scroll_x;
 static u16 view_y;
 static u8 shown;
+static u8 chr_cur, ex_on;
+static u8 ex_pal[30][32];
+static u8 wram_mem[8 * 8192];
+static u8 wram_cur;
 volatile u16 gba_vofs_play;
 
 static const u32 nes_rgb[64] = {
@@ -43,6 +47,7 @@ static u8 pal_of(u8 x, u8 y){
   u8 page = (u8)(x >> 5), tx = (u8)(x & 31);
   u8 idx = (u8)((y >> 2) * 8 + (tx >> 2));
   u8 sh = (u8)(((y & 2) ? 4 : 0) + ((x & 2) ? 2 : 0));
+  if(ex_on && y < 30) return ex_pal[y][tx];
   return (u8)((at[page][idx] >> sh) & 3);
 }
 static void poke(u8 x, u8 y){
@@ -102,6 +107,7 @@ void r_init(void){
   REG_DISPCNT = 0x0080;                  /* forced blank while VRAM is filled */
   copy32(VRAM_BG, (const u32 *)gba_tiles, 2048);
   copy32(VRAM_OBJ, (const u32 *)gba_tiles, 2048);
+  chr_cur = 0;
   for(y = 0; y < 30; y++) for(x = 0; x < 64; x++) nt[y][x] = ' ';
   for(y = 0; y < 2; y++) for(x = 0; x < 64; x++) at[y][x] = 0;
   for(y = 0; y < 32; y++) for(x = 0; x < 64; x++) hw_set(x, y, (u8)(y < 30 ? ' ' : 0), 0);
@@ -155,6 +161,27 @@ void r_bulk_begin(void){}
 void r_bulk_end(void){}
 u8 r_in_bulk(void){ return 0; }
 u8 *r_oam(void){ return oam; }
+void r_prg_bank(u8 bank){ (void)bank; }
+void r_chr_bank(u8 page){
+  const u8 *src;
+  if(page == chr_cur) return;
+  chr_cur = page;
+  src = gba_tiles + (unsigned)page * 8192u;
+  copy32(VRAM_BG, (const u32 *)src, 2048);
+  copy32(VRAM_OBJ, (const u32 *)src, 2048);
+}
+void r_wram_bank(u8 bank){ wram_cur = (u8)(bank & 7); }
+u8 r_wram_banks(void){ return 8; }
+u8 *r_wram_page(void){ return wram_mem + (unsigned)wram_cur * 8192u; }
+u16 r_mul8(u8 a, u8 b){ return (u16)((u16)a * (u16)b); }
+void r_split(u8 line){ (void)line; }
+void r_exattr(u8 on){ ex_on = on ? 1 : 0; }
+void r_excol(u8 x, const u8 *src, u8 rows, u8 chr_bits){
+  u8 y;
+  (void)chr_bits;
+  if(!src || x >= 32) return;
+  for(y = 0; y < rows && y < 30; y++) ex_pal[y][x] = (u8)(src[(u16)y * 32] & 3);
+}
 
 static void pick_view(void){
   int i, n = 0, miny = 240, maxy = 0, focus, y;

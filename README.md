@@ -11,13 +11,13 @@ flowchart TD
     BG[breakout/game.c]:::g
     PF[platformer/game.c]:::g
   end
-  games --> E[engine/engine.c<br>背景/属性/文字, 精灵/metasprite, 输入边沿,<br>场景, 四通道乐曲+音效, 定点数/AABB/地图碰撞, 实体表]
+  games --> E[engine/engine.c<br>背景/属性/文字, 精灵/metasprite, 输入边沿,<br>场景, 六通道乐曲+音效, 定点数/AABB/地图碰撞, 实体表]
   E -->|engine/backend.h| RS[render/render_soft.c<br>模拟 NES PPU：2 张 nametable, 属性, 64 精灵, 翻转, 滚动]
-  E -->|engine/backend.h| RN[render/render_nes.c<br>VRAM 更新队列 → NMI/vblank, OAM DMA, APU 四通道]
+  E -->|engine/backend.h| RN[render/render_nes.c<br>VRAM 更新队列 → NMI/vblank, OAM DMA, APU 与 MMC5 方波]
   E -->|engine/backend.h| RG[render/render_gba.c<br>mode 0 4bpp, BG+OBJ, HBlank 分屏, DMG 四通道]
   RS --> SDL[platform/sdl<br>窗口 3x, 键盘, 方波/三角波/噪声混合]
   RS --> UEFI[platform/uefi<br>GOP 缩放居中, SimpleTextInput, Stall, PC 喇叭]
-  RN --> NES[platform/nes<br>crt0.s, nes.cfg, 手柄]
+  RN --> NES[platform/nes<br>crt0.s, mmc5.cfg / nes.cfg, 手柄]
   RG --> GBA[platform/gba<br>crt0.s, gba.ld, 手柄, vblank]
   A[games/&lt;name&gt;/tiles.png + maps/*.txt + palette.txt + entities.txt] --> T[tools/build_assets.py<br>png2chr.py + png2gba.py + mappack.py + ent2c.py]
   T --> CHR[game.chr → NES]
@@ -32,10 +32,10 @@ flowchart TD
 ```
 engine/   engine.h（公开 API） backend.h（后端接口） engine.c
 render/   render_soft.c/.h（PC 和 UEFI 共用） render_nes.c  render_gba.c
-platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,nes.cfg,nes.h}  gba/{main_gba.c,crt0.s,gba.ld,gba.h}
-games/    breakout/{game.c,tiles.png,palette.txt,maps/,entities.txt,songs.txt,music/*.fms.txt,fami/*.fms.txt}  platformer/ 同样
+platform/ sdl/main_sdl.c  uefi/main_uefi.c  nes/{main.c,crt0.s,mmc5.cfg,nes.cfg,nes.h}  gba/{main_gba.c,crt0.s,gba.ld,gba.h}
+games/    breakout/{game.c,tiles.png,palette.txt,nes.txt,maps/,entities.txt,songs.txt,music/*.fms.txt,fami/*.fms.txt}  platformer/ 同样
 editor/   桌面编辑器（图块、调色板、地图、实体、音乐、编译运行）。见 editor/README.md
-tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py mappack.py romusage.py ent2c.py txt2mus.py fms2mus.py songs2fms.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua fceux_cam.lua qemu_test.sh
+tools/    build_assets.py png2chr.py png2gba.py gbafix.py map2c.py mappack.py nes_target.py romusage.py ent2c.py txt2mus.py fms2mus.py songs2fms.py make_sheets.py mkimg.sh uefi_probe.sh uefi_link.sh fceux_test.lua fceux_cam.lua qemu_test.sh
 lib/      none.lib（cc65 运行库副本，用于离线编译）
 build/<game>/{pc,uefi,nes,gba,gen}/   编译输出
 shots/    测试截图
@@ -45,12 +45,12 @@ shots/    测试截图
 | 项目 | 限制 |
 |---|---|
 | 屏幕 | 256x240；nametable 仍是 64x30 tile。地图可以比两屏宽，相机移动时按列流进去。滚动寄存器仍是 0..511 |
-| 颜色 | 4 组背景调色板 + 4 组精灵调色板，每组 3 色 + 公共背景色；背景调色板按 16x16 区块设置 |
+| 颜色 | 4 组背景调色板 + 4 组精灵调色板，每组 3 色 + 公共背景色。默认按 16x16 属性块上色。`nes.txt` 里 `exattr 1` 时，MMC5 的 ExRAM 改成每个 8x8 一色，只覆盖左边 32 列 |
 | 精灵 | 8x8，每帧最多 64 个；NES 上**同一扫描线最多 8 个**，超出的会消失 |
-| RAM | 2KB：$0200 是 OAM，$0300 是 VRAM 队列，$0700 是 C 栈；游戏和引擎变量放在 $0400-$06FF。DATA+BSS：breakout 379 字节，platformer 378 字节（768 字节里），含大约 40 字节乐曲状态。长地图不展开进 RAM，碰撞按列从 ROM 里的 RLE 读 |
-| 音频 | 4 通道：两路方波、三角波、噪声；没有 DPCM。音效占用 pulse2 |
+| RAM | 2KB 内部 RAM：$0200 是 OAM，$0300 是 VRAM 队列，$0700 是 C 栈；游戏和引擎变量放在 $0400-$06FF。默认 MMC5 的 DATA+BSS：platformer 401 字节，breakout 402 字节（768 字节里）。另外有 64KB WRAM（8 个 8KB bank，窗口在 $6000）。示例游戏没有把变量放进这段，所以用量行是 `WRAM 0/65536`。长地图不展开进 RAM，碰撞按列从 ROM 里的 RLE 读 |
+| 音频 | 乐曲模型是 6 个通道：两路 APU 方波、三角波、噪声，再加上 MMC5 的两路扩展方波。没有 DPCM。音效占用 pulse2。示例曲子不用扩展方波，这两路保持静音 |
 | VRAM 写入 | 每帧大约 96 字节，超出时引擎会等一帧（掉一帧）；在场景 `init` 里写入不受限制（此时渲染已关闭） |
-| ROM | NROM：32KB PRG + 8KB CHR（256 个 tile，背景和精灵共用）。`make` 打印 `rom nes: PRG n/32768 CHR n/8192 RAM n/768`。PRG 放不下就停，并说明这是 mapper 0，没有改成 UxROM 或 MMC1 |
+| ROM | 默认 MMC5（iNES mapper 5，NES 2.0 头）：128KB PRG + 128KB CHR + 64KB PRG-RAM。`make` 打印 `rom nes: mapper 5 PRG n/131072 (%) CHR n/131072 RAM n/768 WRAM n/65536`。本仓库现在是 platformer PRG 23113/131072（17%）、CHR 8192/131072、RAM 401/768、WRAM 0/65536；breakout PRG 14759/131072（11%）、RAM 402/768。小游戏可以在 `nes.txt` 写 `mapper nrom`，或 `make NES_MAPPER=nrom`，回到 mapper 0 的 32KB PRG + 8KB CHR。NROM 放不下时构建停止，提示里有 `32KB PRG 放不下` |
 | 数值 | 整数；`fx` 是 12.4 定点数（范围 ±2047 像素）；cc65 的 `int` 是 16 位 |
 
 ## 引擎 API 参考（engine/engine.h）
@@ -79,11 +79,20 @@ shots/    测试截图
 
 **实体**：`entities.txt` 定义类型，地图末尾的 `entities:` 放实例。生成的表每条 12 字节（类型、x 低/高、y、4 个小端 u16 属性），一张图最多 32 个。`ent_ptr`、`ent_type`、`ent_x`、`ent_y`、`ent_prop(p, n)` 读一条记录，`ent_find` 找第一种类型（找不到返回 255）。引擎不跑实体逻辑，每个游戏自己解释这些数。
 
-**关卡**：`games/<游戏>/maps/order.txt` 一行一个地图名，顺序就是关卡号。`level_load(n)` 载入第 n 关（从 0 起），`level_count` / `level_current` / `level_cols` / `level_music` / `level_ents` / `level_ent_n` 读当前关。`level_scroll(像素)` 让两屏宽的 nametable 跟着相机走。`tm_flags_at` 在关卡载入后按世界坐标查碰撞，不用把整张图解进 RAM。每关可以在地图第一行写 `music 歌名`，编号是 `songs.txt` 里 `song` 的顺序。`test_level`（255 表示不用）和 `test_cam`（65535 表示不用）给截图用；SDL 读 `RETRO_LEVEL` 和 `RETRO_CAM`。
+**关卡**：`games/<游戏>/maps/order.txt` 一行一个地图名，顺序就是关卡号。`level_load(n)` 载入第 n 关（从 0 起），`level_count` / `level_current` / `level_cols` / `level_music` / `level_ents` / `level_ent_n` 读当前关。`level_scroll(像素)` 让两屏宽的 nametable 跟着相机走。`tm_flags_at` 在关卡载入后按世界坐标查碰撞，不用把整张图解进 RAM。每关可以在地图第一行写 `music 歌名`，编号是 `songs.txt` 里 `song` 的顺序。地图还可以写 `tileset N`，选择第 N 页 CHR（每页 256 个图块，0 是原来的那一页）。`test_level`（255 表示不用）和 `test_cam`（65535 表示不用）给截图用；SDL 读 `RETRO_LEVEL` 和 `RETRO_CAM`。
+
+**卡带**（游戏代码不用写平台判断；NROM 和没有这块硬件的平台上这些调用是空操作或软件等价）：
+
+- `prg_bank(n)`：把 8KB PRG 窗口切到 CPU `$8000`。`level_load` 会按关卡自己切，关卡压缩数据就放在这个窗口里。代码、音乐和关卡表留在 `$A000`–`$FFFF` 的 24KB 固定区。窗口里的指针只在对应 bank 映射着的时候有效。
+- `chr_bank(page)`：切换 8KB 图案表。`level_load` 按该关的 `tileset` 调用。
+- `wram_bank(n)` / `wram_banks()` / `wram_page()`：MMC5 上有 8 个 8KB WRAM bank，当前页在 `$6000`。PC、UEFI、GBA 用一块 64KB 模拟。
+- `mul8(a, b)`：8 位乘 8 位，得到 16 位。MMC5 用 `$5205`/`$5206`，其它平台用普通乘法。
+- `video_split(scanline)`：0 表示关闭。非 0 时，NMI 先把滚动设为 0、名表 0，到这条扫描线 MMC5 的扫描线 IRQ 再恢复游戏相机的滚动。示例游戏不调用它。
+- `video_exattr(on)`：打开后用 ExRAM 做每个 8×8 的调色板。`nes.txt` 的 `exattr 1` 会在载入关卡时打开。默认是 0，属性仍是 16×16。
 
 ## 音频
 
-乐曲和音效同时播放。模型就是 NES APU 的前四个通道，没有 DPCM。游戏代码和 `engine.c` 里没有平台 `#ifdef`，只用整数，每帧（60Hz）走一步。
+乐曲和音效同时播放。模型是 NES APU 的前四个通道，再加上 MMC5 的两路扩展方波，没有 DPCM。游戏代码和 `engine.c` 里没有平台 `#ifdef`，只用整数，每帧（60Hz）走一步。示例曲子只写前四路，扩展方波的音量是 0，听起来和原来一样。
 
 | 通道 | 波形 | 谁在用 |
 |---|---|---|
@@ -91,6 +100,8 @@ shots/    测试截图
 | pulse2 | 方波 | 乐曲和声；`sfx()` 临时占用，结束后回到乐曲 |
 | triangle | 三角波 | 低音。NES 上没有音量，只有开和关 |
 | noise | 15 位 LFSR | 打击乐。`mode 1` 是短模式 |
+| pulse3 | MMC5 方波 | 可选的额外旋律。NES 写到 `$5000`。其它平台有音量时用软件混进去 |
+| pulse4 | MMC5 方波 | 同上，NES 写到 `$5004` |
 
 音高用 NTSC 的 APU 周期：方波频率是 `1789773/16/(period+1)`，三角波是 `1789773/32/(period+1)`。SDL 用同一组周期去合成，所以和 NES 是同一个调。
 
@@ -123,6 +134,12 @@ triangle vol 15
 
 noise vol 6 mode 0
   N1 8 N12 8
+
+pulse3 duty 2 vol 8
+  E5 8 R 8
+
+pulse4 duty 2 vol 6
+  C5 4
 ```
 
 - `tempo` 是四分音符的 BPM。八分音符正好是它的一半（四分音符帧数会取整，写十六分音符时最好让这个帧数能被 4 整除，例如 tempo 120 → 30 帧，tempo 128 → 28 帧，tempo 150 → 24 帧）。
@@ -130,7 +147,7 @@ noise vol 6 mode 0
 - 时值：`1` 全音符、`2` 二分、`4` 四分、`8` 八分、`16` 十六分、`32` 三十二分。`8.` 是附点八分。`t12` 表示正好 12 帧。
 - `loop` 单独一行：它上面的是前奏，只播一次；下面的反复。不写 `loop` 就整段循环。通道行上写 `once` 则播完就停。
 - 噪声只用 `N0`（最高、最尖）到 `N15`（最低）。`mode 1` 切换短 LFSR。
-- 四个通道各自循环。总帧数不一样时，`txt2mus.py` 会警告，听起来会慢慢错开。
+- 六个通道各自循环。总帧数不一样时，`txt2mus.py` 会警告，听起来会慢慢错开。`pulse3` / `pulse4` 也可以写成 `mmc5pulse1` / `mmc5pulse2`。不写这两段时，生成的轨道是空的。
 - `duty` 只对方波有意义：0 = 12.5%，1 = 25%，2 = 50%，3 = 75%。`vol` 是 0..15。
 
 `make` 先用 `tools/fms2mus.py` 把 `songs.txt` 和 FamiStudio 文本合成 `build/<游戏>/gen/songs.gen.txt`，再调用 `tools/txt2mus.py` 生成 `music.c` 和 `music.h`（里面有 `MUS_TITLE` 这类宏，以及 `music_lookup()`）。`songs.txt` 里的歌排在前面。
@@ -144,7 +161,7 @@ noise vol 6 mode 0
 
 **用 FamiStudio 写曲子**
 
-FamiStudio 是原生桌面程序（Linux 上用 .NET 启动，也有 Flatpak）。四个旋律通道和引擎一一对应：Square1 → pulse1，Square2 → pulse2，Triangle → triangle，Noise → noise。
+FamiStudio 是原生桌面程序（Linux 上用 .NET 启动，也有 Flatpak）。通道对应是：Square1 → pulse1，Square2 → pulse2，Triangle → triangle，Noise → noise，MMC5Square1 → pulse3，MMC5Square2 → pulse4。
 
 在 Ubuntu 上安装官方压缩包：
 
@@ -165,7 +182,7 @@ Flatpak 会自己带上依赖：`flatpak install flathub org.famistudio.FamiStud
 - 音符、休止、Stop、Release、pattern 的排列和 Loop point 会保留。Release 当成提前停音，不播释音包络。Loop point 是整首歌的，落在某个 pattern 列的开头。`-1` 表示每个通道只播一次。
 - 一条音符在引擎里最长 255 帧。更长的会拆成几段相同音高接在一起，波形不会重新触发。
 
-不会导入、但也不会让转换失败的内容：DPCM 采样和 DPCM 通道，扩展芯片（VRC6、VRC7、FDS、MMC5、N163、S5B、EPSM），滑音、颤音、琶音、微调音高、音量滑动。音高停在音符本身。`tools/fms2mus.py` 把这些写到标准错误。
+MMC5 的两路方波会导入成 pulse3 / pulse4。不会导入、但也不会让转换失败的内容：DPCM 采样和 DPCM 通道，其它扩展芯片（VRC6、VRC7、FDS、N163、S5B、EPSM），滑音、颤音、琶音、微调音高、音量滑动。音高停在音符本身。`tools/fms2mus.py` 把这些写到标准错误。
 
 导出并编进游戏：
 
@@ -184,14 +201,14 @@ PC 上只听某一首、并且游戏里的 `music_play` 都改播它：`RETRO_MU
 
 **四个后端**
 
-- NES：每帧写 `$4000`–`$400F`，并打开 `$4015` 的低四位。只有音高的高 3 位变了，或者一个通道从静音变成发声时，才写 `$4003` / `$400B` / `$400F`，避免每帧重置相位发出杂音。
-- SDL：回调里用同一套周期合成方波（占空比序列）、32 步三角波和噪声 LFSR，混合成 44100Hz 单声道。`RETRO_WAV=文件.wav` 时不打开声卡，改为每个引擎帧写 735 个采样。
-- UEFI：PC 喇叭（端口 `0x61`，PIT 通道 2 `0x42`）。同时只能响一个音，优先级是 pulse2、pulse1、三角波，这样音效能盖过旋律。噪声不走喇叭。QEMU 需要把 PC speaker 接到音频设备，例如 `-audiodev wav,id=snd,path=uefi.wav -machine pcspk-audiodev=snd`。没有这块设备时喇叭是静音的。
-- GBA：DMG 音源的四路。方波 1、方波 2 的占空比和 NES 一样（12.5/25/50/75%）。三角波写进 wave RAM，音量分成 100/50/25% 三档。噪声用最接近的多项式计数器；NES 的 `duty` 最低位是短模式。只有音高变了或者从静音变成发声时才重新触发，避免每帧咔哒一声。音效仍占方波 2。GBA 方波最低大约 64Hz，比 NES 的最低音稍高，那些音会被夹到最低。最快的噪声（N0）大约偏高 17%。
+- NES：每帧写 `$4000`–`$400F`，并打开 `$4015` 的低四位。只有音高的高 3 位变了，或者一个通道从静音变成发声时，才写 `$4003` / `$400B` / `$400F`，避免每帧重置相位发出杂音。pulse3 / pulse4 有音量时才写 `$5000` / `$5004` 并打开 `$5015`，避免空的扩展通道去动 APU 的相位。
+- SDL：回调里用同一套周期合成方波（占空比序列）、32 步三角波和噪声 LFSR，混合成 44100Hz 单声道。pulse3 / pulse4 只在音量不为 0 时加进去，所以示例曲子的采样和以前一致。`RETRO_WAV=文件.wav` 时不打开声卡，改为每个引擎帧写 735 个采样。
+- UEFI：PC 喇叭（端口 `0x61`，PIT 通道 2 `0x42`）。同时只能响一个音，优先级是 pulse2、pulse1、三角波，这样音效能盖过旋律。噪声和 MMC5 扩展方波不走喇叭。QEMU 需要把 PC speaker 接到音频设备，例如 `-audiodev wav,id=snd,path=uefi.wav -machine pcspk-audiodev=snd`。没有这块设备时喇叭是静音的。
+- GBA：DMG 音源的四路，读的是 pulse1、pulse2、三角波和噪声。方波 1、方波 2 的占空比和 NES 一样（12.5/25/50/75%）。三角波写进 wave RAM，音量分成 100/50/25% 三档。噪声用最接近的多项式计数器；NES 的 `duty` 最低位是短模式。只有音高变了或者从静音变成发声时才重新触发，避免每帧咔哒一声。音效仍占方波 2。MMC5 的两路扩展方波在 GBA 上不发声。GBA 方波最低大约 64Hz，比 NES 的最低音稍高，那些音会被夹到最低。最快的噪声（N0）大约偏高 17%。
 
 ## 一步一步做一个新游戏
 1. `mkdir games/mygame`
-2. 画 tile 表 `tiles.png`：宽 128，高不超过 128，共 16x16 个 8x8 tile，tile 编号按行排列。只能用 4 种灰度：黑=0、85 灰=1、170 灰=2、白=3，分别对应调色板里的颜色编号。字体放在 ASCII 码对应的位置；可以运行 `python3 tools/make_sheets.py breakout games/mygame/tiles.png` 生成一张带字体的起始图。
+2. 画 tile 表 `tiles.png`：宽 128。默认一页高 128，共 256 个 8x8 tile，编号按行排列。MMC5 可以再往下加页，每页 128 像素、256 个图块，最多 16 页（高 2048）。NROM 只接受一页。只能用 4 种灰度：黑=0、85 灰=1、170 灰=2、白=3，分别对应调色板里的颜色编号。字体放在 ASCII 码对应的位置；可以运行 `python3 tools/make_sheets.py breakout games/mygame/tiles.png` 生成一张带字体的起始图。某一关要用后面的页时，在地图第一行写 `tileset N`（从 0 起）。
 3. 做地图（可选），放在 `games/mygame/maps/`：
    - `order.txt` 决定关卡顺序，一行一个名字。
    - 文本格式 `maps/level.txt`（高度必须是 30 行，宽度 1..512 列，编辑器里新建时按 32 列对齐）：
@@ -216,18 +233,18 @@ PC 上只听某一首、并且游戏里的 `music_play` 都改播它：`RETRO_MU
 
 ## 添加一个新平台
 1. 帧缓冲类平台：复用 `render_soft.c`。平台层负责：`engine_init()` → 每 1/60 秒调用 `engine_frame(按键位掩码)` → `soft_compose(fb)` → 显示。音频读 `soft_period[4]`、`soft_vol[4]`、`soft_duty[4]`（已经是 NES 定时器数值）。
-2. tile 硬件类平台（GB、SMS、PCE…）：照着 `render_nes.c` 实现 `backend.h` 里的函数（`r_init r_palette r_tiles r_column r_attr r_scroll r_bulk_begin/end r_in_bulk r_oam snd_hw`）。`r_column` 按列写 nametable（NES 上长度字节的最高位表示纵向 +32）。`r_in_bulk` 告诉 `level_load` 现在是不是已经在整屏上传里，避免提前结束。`snd_hw` 收到 4 个 `SndCh`。
+2. tile 硬件类平台（GB、SMS、PCE…）：照着 `render_nes.c` 实现 `backend.h` 里的函数（`r_init r_palette r_tiles r_column r_attr r_scroll r_bulk_begin/end r_in_bulk r_oam snd_hw`，以及 `r_prg_bank r_chr_bank r_wram_bank r_wram_banks r_wram_page r_mul8 r_split r_exattr r_excol`）。没有对应硬件时，bank 和分屏做成空操作，乘法用软件算。`r_column` 按列写 nametable（NES 上长度字节的最高位表示纵向 +32）。`r_in_bulk` 告诉 `level_load` 现在是不是已经在整屏上传里，避免提前结束。`snd_hw` 收到 6 个 `SndCh`，下标 4 和 5 是 MMC5 扩展方波。
 3. 在 Makefile 里加一个 target，把 `engine/engine.c`、`games/$(GAME)/game.c` 和生成的资源编进去。
 
 ## 资源流程
 `tools/build_assets.py games/<g> build/<g>/gen` 会生成：
-- `game.chr`：8KB 的 NES 图案表（ca65 通过 `.incbin` 引入）
-- `tiles.c`：`chr_tiles[4096]`，内容和 CHR 一样，给软件渲染器用
+- `game.chr`：NES 图案表，ca65 用 `.incbin` 引进来。每一页 8KB（4096 字节图块 + 4096 字节空白；背景和精灵都用图案表 0）。MMC5 的链接脚本再把 CHR 补到 128KB
+- `tiles.c`：`chr_tiles[]`，每页 4096 字节图块（不含那 4KB 空白），给软件渲染器用。页号乘 4096 就是这页的起点
 - `maps.c` 和 `assets.h`：关卡表（列 RLE、列索引、属性、碰撞标志、实体、音乐编号），以及 `game_palette` 的声明
 - `palette.c`：`game_palette[32]`，从 `palette.txt` 来
 - `tiles_gba.c`：`gba_tiles[8192]`，同一张图的 GBA 4bpp（每 tile 32 字节，低 nibble 是左边的像素）
 
-所以每个游戏只有一份图形源（`tiles.png`）、一份调色板（`palette.txt`）和 `maps/` 里的关卡，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会把 `songs.txt` 和 `music/*.fms.txt` 编成 `music.c`。链接完会打印一行 `rom pc|uefi|gba|nes: ...`。NES 的 PRG 超过 32768 或这段 RAM 超过 768 时，`romusage.py` 以非 0 退出。ld65 自己报放不下时，Makefile 再打印：`错误：NES NROM 的 32KB PRG 放不下。这是 mapper 0，没有升级到 UxROM 或 MMC1。`
+所以每个游戏只有一份图形源（`tiles.png`）、一份调色板（`palette.txt`）和 `maps/` 里的关卡，各平台的画面用的是同一套 tile。`make` 会自动运行这一步，也会把 `songs.txt` 和 `music/*.fms.txt` 编成 `music.c`。链接完会打印一行 `rom pc|uefi|gba|nes: ...`。NES 用哪张卡由 `games/<游戏>/nes.txt` 决定，缺文件时按 MMC5。命令行的 `NES_MAPPER=nrom` 或 `NES_MAPPER=mmc5` 盖过这个文件。内部 RAM 超过 768 时 `romusage.py` 以非 0 退出。NROM 的 PRG 超过 32768 或 CHR 超过 8192 时同样退出，提示里有 `32KB PRG 放不下`。ld65 自己报放不下时，Makefile 再打印一句：NROM 是 `错误：NES NROM 的 32KB PRG 放不下。这是 mapper 0，没有升级到 UxROM 或 MMC1。`；MMC5 是固定代码窗口（`$A000`–`$FFFF`，24KB）放不下，关卡数据要放进 8KB 的 PRG 窗口。一关压缩后超过大约 8160 字节时，资源脚本会先报 `8KB PRG 窗口放不下`。
 
 地图文本可以在 `map:` 后面加可选的 `palmap:`，每格一位数字（0–3）。没有这一段时，调色板仍按 legend 里图块的 `pal=` 来，和以前的文件完全一样。同一 16×16 里如果出现两种非 0 调色板，采用先遇到的那个。
 
@@ -289,13 +306,13 @@ python3 editor/retro_editor.py
 
 打开 `games/<名字>/` 之后：
 
-1. **图块**：画 `tiles.png` 里的 8×8 图块（4 色），可缩放、复制、翻转、撤销。
+1. **图块**：画 `tiles.png` 里的 8×8 图块（4 色），可缩放、复制、翻转、撤销。MMC5 可以用「加一页」把图块表加高一页（最多 16 页）。
 2. **调色板**：从 NES 的 64 色里点选 32 个颜色，存进 `palette.txt`。
-3. **地图**：用真彩色涂格子，选图块和调色板，标实心。16×16 的属性块会画出来；勾上「统一 16×16 调色板」时，涂一格会把那一块的调色板改成同一个。黄线是屏幕分界。图层可以切到「实体」：左边是类型（用真实精灵画），左键放置，拖动移动，右键或 Delete 删除，下面改坐标和属性。默认吸附 8 像素，取消勾选就是 1 像素。「编辑类型」改 `entities.txt`。预览里也能看到这些精灵。
-4. **音乐**：按通道改音符、速度、占空比、音量、循环，在编辑器里试听，也可以导入 FamiStudio 文本。保存进 `songs.txt`。撤销和重做包括改音符、加行、删行、循环、速度和新建/删除曲子。
+3. **地图**：用真彩色涂格子，选图块和调色板，标实心。「图块页」决定这一关用 CHR 的哪一页。16×16 的属性块会画出来；勾上「统一 16×16 调色板」时，涂一格会把那一块的调色板改成同一个。编译页打开 ExRAM 之后，预览改成 8×8 一格一色，左边 32 列不再画属性冲突框。黄线是屏幕分界。图层可以切到「实体」：左边是类型（用真实精灵画），左键放置，拖动移动，右键或 Delete 删除，下面改坐标和属性。默认吸附 8 像素，取消勾选就是 1 像素。「编辑类型」改 `entities.txt`。预览里也能看到这些精灵。
+4. **音乐**：按通道改音符、速度、占空比、音量、循环，在编辑器里试听，也可以导入 FamiStudio 文本。通道列表里有「MMC5 方波 1」和「MMC5 方波 2」。保存进 `songs.txt`。撤销和重做包括改音符、加行、删行、循环、速度和新建/删除曲子。
 5. **预览**：按游戏的上色方式看当前地图，实体叠在上面。
 6. **代码**：编辑 `game.c`（逻辑仍然是 C）。
-7. **编译**：PC / UEFI / NES / GBA。日志里会提示缺哪个 apt 包。「检查依赖」列出还要装什么。运行按钮会启动 PC 程序、fceux、mGBA 或 QEMU。
+7. **编译**：PC / UEFI / NES / GBA。NES 一行可以选择 MMC5（默认）或 NROM，勾选框是 ExRAM 扩展属性（默认关）。选择写进 `nes.txt`，编译时还会带上 `NES_MAPPER=`。日志里会提示缺哪个 apt 包。「检查依赖」列出还要装什么。运行按钮会启动 PC 程序、fceux、mGBA 或 QEMU。用量行在 MMC5 下带 mapper 号、PRG/131072、CHR/131072、RAM/768 和 WRAM/65536。
 
 `make run` 仍然只编译并启动当前游戏的 PC 版。新建游戏可以从空白模板，或复制 breakout / platformer。
 
@@ -312,7 +329,7 @@ python3 editor/retro_editor.py
     -drive format=raw,file=build/breakout/uefi/breakout.img
   ```
   写入 U 盘（**会清空设备**）：`sudo dd if=build/breakout/uefi/breakout.img of=/dev/sdX bs=4M conv=fsync status=progress`，关闭 Secure Boot，以 UEFI 方式启动。
-- NES：`fceux build/platformer/nes/platformer.nes`，也可以用 Mesen；真机可以用 EverDrive 等烧录卡（mapper 0 / NROM）。
+- NES：`fceux build/platformer/nes/platformer.nes`，也可以用 Mesen（MMC5 的扫描线 IRQ 以 Mesen 为准更稳妥）。默认 ROM 是 NES 2.0、mapper 5、128KB PRG、128KB CHR、64KB WRAM、文件 262160 字节。真机要用支持 MMC5 的烧录卡：EverDrive N8 Pro 支持 MMC5，N8 初代对 MMC5 的支持有限。小游戏用 `make NES_MAPPER=nrom` 得到 mapper 0 的 40KB ROM（16 字节头 + 32KB PRG + 8KB CHR）。
 - GBA：`mgba build/breakout/gba/breakout.gba`（或 `/usr/games/mgba`）。主循环每进一次 vblank 走一帧，大约 59.73Hz，引擎仍按 60Hz 计。自动演示 ROM（不读手柄，改喂 `game_autopilot()`）：`make GAME=breakout gba-auto`，输出 `build/breakout/gba/breakout-auto.gba`。
 - 自动测试：`tools/qemu_test.sh <game> shots/uefi_<game>`；`RETRO_GAME=<game> RETRO_SHOTS=$PWD/shots/nes_<game> fceux --loadlua tools/fceux_test.lua build/<game>/nes/<game>.nes`（无界面时需要配合 Xvfb）
 
@@ -366,10 +383,15 @@ make UEFI_LIBDIRS=/path/to/lib UEFI_INCDIR=/path/to/include/efi GAME=breakout ue
 - NES 每条扫描线最多 8 个精灵，背景色块是 16x16；fceux 默认会裁掉画面最上和最下各 8 行（屏幕顶部的 HUD 会被切掉一部分）。
 - 软件渲染器的 RGB 调色板和 fceux 的不完全一样，颜色会略有差异。
 - 修改背景 tile 不会自动更新碰撞地图（`tm_bind` 绑定的是 ROM 里的地图）。
-- 只支持水平滚动。nametable 始终是两屏（64 列）。比这更宽的地图按列流进去：世界第 c 列画在 nametable 的 `c & 63`，滚动值是 `相机 & 511`。玩家大约每 5 帧走出新的一列。一列是 30 个 tile 加 8 个属性字节，排队大约 65 字节，在每帧约 96 字节的 vblank 预算里。PC、UEFI 和 GBA 用同一套窗口。竖直方向仍是 30 行。格式上限 512 列。`fx` 是 12.4 有符号数，实用上玩家坐标到 2047 像素，所以示例长关是 256 列（2048 像素）。GBA 以外的平台没有画面分割，所以滚动场景的 HUD 要用精灵来画。GBA 额外把地图最上面两行钉在屏幕顶部，见上面的「GBA 画面」。
+- 只支持水平滚动。nametable 始终是两屏（64 列）。比这更宽的地图按列流进去：世界第 c 列画在 nametable 的 `c & 63`，滚动值是 `相机 & 511`。玩家大约每 5 帧走出新的一列。一列是 30 个 tile 加 8 个属性字节，排队大约 65 字节，在每帧约 96 字节的 vblank 预算里。PC、UEFI 和 GBA 用同一套窗口。竖直方向仍是 30 行。格式上限 512 列。`fx` 是 12.4 有符号数，实用上玩家坐标到 2047 像素，所以示例长关是 256 列（2048 像素）。滚动场景的 HUD 默认用精灵来画。NES 上可以再调用 `video_split` 把名表滚动 0 钉在扫描线以上，见上面的卡带 API。GBA 额外把地图最上面两行钉在屏幕顶部，见上面的「GBA 画面」。
 - GBA 不写入任天堂 Logo，真机原装 BIOS 会停在启动画面；模拟器和烧录卡上自带的 BIOS 替换一般能过。噪声音高是近似值。L/R 未使用。
 - 实体表只负责摆放和属性。Platformer 读玩家起点、全部硬币、终点，以及靠近相机的敌人（最多 4 个槽，用 `left`/`right` 巡逻）。离开相机一段距离后槽会空出来，后面的敌人再进来。Breakout 的挡板位置来自 `paddle`，球的待机位置是相对挡板的有符号 8 位偏移（默认 +12, −8）。标题画面上的装饰精灵仍写在 `game.c` 里。y 只到 255。一张图最多 32 个实体、每种类型最多 4 个属性。
 - 列压缩是按列的 RLE，不是 16×16 metatile。一列固定 30 字节：`0nnnnnnn` 后面跟 n 个原样 tile（n 为 1..127），`1nnnnnnn` 后面跟一个 tile、重复 n 次（n 为 2..127）。每关另有一张 `u16` 列索引（长度是列数 + 1）指向这块数据。属性字节是编译时算好的，不在运行时重算。碰撞用这条索引走到那一列，再查 256 字节的标志表。RLE 块超过 65535 字节会报错。
 - 换关时 `level_load` 会关画面，把可见的 64 列直接写进 PPU。NES 上这一步大约二十帧。流进新列的上传在游戏帧里排队，由 NMI 在 vblank 写完再改滚动。
-- 没有把 NROM 升级到 UxROM 或 MMC1。32KB PRG 放不下时构建失败，需要删内容或以后单独做换 bank。
+- 默认 NES 目标是 MMC5。`NES_MAPPER=nrom` 仍是 mapper 0：32KB PRG 放不下就停，错误原文说明这是 mapper 0、没有升级到 UxROM 或 MMC1。MMC5 的关卡数据在 `$8000` 的 8KB 窗口里，一关一个 bank（超过 13 关时再往窗口里拼）。代码和音乐在后面的 24KB。CHR 按 8KB 一页切换，示例游戏只用第 0 页。
+- `video_split` 把屏幕上半截钉在滚动 0、名表 0，下半截恢复相机滚动。fceux 2.6.5 里对过：上半截和「整帧滚动 0」一致，下半截和「不开分屏」一致。上半截显示的是当前两屏名表在滚动 0 的内容，也就是 64 列窗口的左端，不是另一块 HUD 缓冲。列流会改写这些列，相机走出第一屏之后，滚动 0 不再是关卡开头。示例游戏不调用它，画面和以前一样。
+- ExRAM 扩展属性打开后，只有名表最左边 32 列按 8×8 上色（ExRAM 只有一屏，后面的名表会镜像这 32 列）。示例游戏的 `nes.txt` 是 `exattr 0`。编辑器的勾选默认关闭。
+- 64KB WRAM 可以换 bank 来用（`wram_bank` / `wram_page`）。示例游戏没有把 BSS 放进 `XRAM` 段，用量是 0。复位时 8 个 bank 都会清零。
+- MMC5 扩展方波已经接到乐曲的 pulse3 / pulse4，也能从 FamiStudio 的 MMC5Square1 / MMC5Square2 导入。示例曲子没有写这两路。SDL 只在音量不为 0 时混入；UEFI 喇叭和 GBA 的 DMG 音源不播放它们。这次没有单独录一条带扩展方波的曲子。
+- 8×8 乘法在 NES 上走 MMC5 的 `$5205`/`$5206`（fceux 里 12×13=156、200×200=40000），其它平台用 C 的乘法。游戏代码目前没有调用它。
 - 地图的调色板按图块记在 legend 里；同一图块要在不同格子用不同调色板时，才写出 `palmap:`。试听用的合成器和 SDL 那一版一致，不是 NES APU 的逐周期模拟。音乐撤销覆盖音符、行、循环、速度和曲目列表，不记录试听播放本身。

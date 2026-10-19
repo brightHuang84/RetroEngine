@@ -7,11 +7,13 @@
 #define PPUDATA   (*(volatile u8*)0x2007)
 #define JOY1      (*(volatile u8*)0x4016)
 #define APU(a)    (*(volatile u8*)(a))
-extern volatile u8 nmi_count, vram_len, scroll_x, ppu_ctrl;
+extern volatile u8 nmi_count, vram_len, scroll_x, ppu_ctrl, split_line, ex_on;
 #pragma zpsym("nmi_count")
 #pragma zpsym("vram_len")
 #pragma zpsym("scroll_x")
 #pragma zpsym("ppu_ctrl")
+#pragma zpsym("split_line")
+#pragma zpsym("ex_on")
 extern u8 vram_buf[];
 void wait_vblank(void);
 #endif

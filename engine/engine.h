@@ -55,17 +55,22 @@ const Scene *game_boot(void);                 /* provided by the game: first sce
 u8 game_autopilot(void);                      /* provided by the game: test-mode input (PC test mode) */
 extern u8 frame_count;
 
-/* ---------- audio: 4 NES APU channels (no DPCM) ---------- */
+/* ---------- audio: NES APU plus two optional MMC5 pulses (no DPCM) ---------- */
 #define CH_PULSE1 0
 #define CH_PULSE2 1
 #define CH_TRI    2
 #define CH_NOISE  3
-/* A song is four independent note streams. NULL channel = silent.
+#define CH_PULSE3 4
+#define CH_PULSE4 5
+#define MUS_CHANS 6
+/* A song is six note streams. NULL channel = silent. Channels 4 and 5 are the
+   MMC5 expansion pulses. Other targets mix them in software or ignore a silent
+   track, so a song that leaves them NULL sounds the same everywhere.
    loop == 0xFFFF plays once; otherwise it is the byte offset to jump to at the end.
    Pulse/triangle events are note indices (1 = C1 .. 84 = B7, 0 = rest) plus a duration.
    Noise events use 1..16 for hardware period N0..N15. Streams end with 0xFF. */
 typedef struct Track { const u8 *data; u16 loop; u8 duty; u8 vol; } Track;
-typedef struct Song { const Track *ch[4]; } Song;
+typedef struct Song { const Track *ch[MUS_CHANS]; } Song;
 enum { SFX_NONE, SFX_BLIP, SFX_HIT, SFX_COIN, SFX_JUMP, SFX_LOSE, SFX_WIN };
 void sfx(u8 id);                              /* steals pulse2 until the effect ends; ids unchanged */
 void music_play(u8 id);                       /* game supplies music_lookup */
@@ -102,9 +107,14 @@ typedef struct Level {
   u8 rows;
   u8 ent_n;
   u8 music;
+  u8 chr_page;                  /* 8KB CHR page. 0 is the original 256-tile sheet */
+  u8 prg;                       /* MMC5 8KB bank at $8000 holding pack/index/attr/flags/ents */
+  const u8 *xpal;               /* 32*30 per-tile palettes, or 0. Valid only while this PRG bank is mapped */
 } Level;
 u8 game_level_count(void);                   /* provided by generated maps.c */
-const Level *game_level(u8 n);
+u8 game_exattr(void);                         /* 1 when nes.txt says exattr 1 */
+const Level *game_level(u8 n);                /* switches the PRG bank, then returns the row.
+                                                 Pointers inside stay valid until the next game_level/level_load. */
 void level_load(u8 n);                       /* scene init, or mid-game (blanks while uploading) */
 u8   level_count(void);
 u8   level_current(void);
@@ -115,6 +125,16 @@ u8   level_ent_n(void);
 void level_scroll(u16 cam_px);               /* keep the 2-screen window on this camera */
 extern u8 test_level;
 extern u16 test_cam;
+
+/* ---------- cartridge (no effect on NROM / ignored where the hardware lacks it) ---------- */
+void prg_bank(u8 bank);                       /* 8KB PRG window at $8000. Level loads do this. */
+void chr_bank(u8 page);                       /* 8KB pattern page. Level loads do this. */
+void wram_bank(u8 bank);                      /* 8KB WRAM window at $6000 */
+u8   wram_banks(void);                        /* how many 8KB WRAM banks this target has */
+u8  *wram_page(void);                         /* pointer to the current window, or 0 */
+u16  mul8(u8 a, u8 b);                        /* 8x8 -> 16 multiply (MMC5 $5205, else software) */
+void video_split(u8 scanline);                /* 0 off. Nonzero: pin scroll 0 until this scanline, then the real scroll */
+void video_exattr(u8 on);                     /* per-8x8 palette via MMC5 ExRAM. Off keeps 16x16 attributes */
 
 /* ---------- entities (ROM tables from entities.txt + the map) ----------
    One record is ENT_BYTES bytes: type, x lo/hi, y, then 4 little-endian u16 props.

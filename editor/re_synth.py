@@ -52,8 +52,8 @@ def engine_period(channel, pitch):
 
 class Mixer(object):
     def __init__(self):
-        self.pulse_acc = [0, 0]
-        self.pulse_step = [0, 0]
+        self.pulse_acc = [0, 0, 0, 0]
+        self.pulse_step = [0, 0, 0, 0]
         self.tri_acc = 0
         self.tri_step = 0
         self.noise_acc = 0
@@ -110,9 +110,15 @@ class Mixer(object):
                 mix += (vol[1] if bit else -vol[1]) * 320
             if vol[2]:
                 mix += self._tri(period[2]) * vol[2] * 22
-            if vol[3]:
+            if len(vol) > 3 and vol[3]:
                 bit = self._noise(period[3], duty[3] & 1)
                 mix += (vol[3] if bit else -vol[3]) * 200
+            if len(vol) > 4 and vol[4]:
+                bit = self._pulse_bit(2, period[4], duty[4])
+                mix += (vol[4] if bit else -vol[4]) * 320
+            if len(vol) > 5 and vol[5]:
+                bit = self._pulse_bit(3, period[5], duty[5])
+                mix += (vol[5] if bit else -vol[5]) * 320
             if mix > 32767:
                 mix = 32767
             if mix < -32768:
@@ -181,7 +187,7 @@ def render_song(compiled, seconds=4, master=12):
     mix = Mixer()
     out = array.array('h')
     for _ in range(frames):
-        period, vol, duty = [0, 0, 0, 0], [0, 0, 0, 0], [2, 2, 0, 0]
+        period, vol, duty = [0] * 6, [0] * 6, [2] * 6
         for i, seq in enumerate(seqs):
             seq.step()
             duty[i] = seq.duty

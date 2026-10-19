@@ -106,9 +106,9 @@ static const u16 sfx_data[] = {   /* (period, frames) pairs, 0 terminated; index
   0x1AB, 6, 0x153, 6, 0x11D, 6, 0x0D5, 16, 0 /* WIN */
 };
 static const u8 sfx_start[] = { 0, 1, 4, 9, 14, 21, 28 };
-static const Track *tr[4];
-static u16 mus_pos[4], mus_period[4];
-static u8 mus_timer[4], mus_gate[4];
+static const Track *tr[MUS_CHANS];
+static u16 mus_pos[MUS_CHANS], mus_period[MUS_CHANS];
+static u8 mus_timer[MUS_CHANS], mus_gate[MUS_CHANS];
 static u8 mus_paused, mus_master, mus_lock, mus_lock_id;
 static u8 sfx_pos, sfx_left, sfx_on;
 static u16 sfx_period;
@@ -122,14 +122,14 @@ void music_play(u8 id){
   if(mus_lock) id = mus_lock_id;
   s = music_lookup(id);
   mus_paused = 0;
-  for(i = 0; i < 4; i++){
+  for(i = 0; i < MUS_CHANS; i++){
     tr[i] = (s && s->ch[i]) ? s->ch[i] : 0;
     mus_pos[i] = 0; mus_timer[i] = 0; mus_gate[i] = 0; mus_period[i] = 0;
   }
 }
 void music_stop(void){
   u8 i;
-  for(i = 0; i < 4; i++){ tr[i] = 0; mus_gate[i] = 0; mus_timer[i] = 0; }
+  for(i = 0; i < MUS_CHANS; i++){ tr[i] = 0; mus_gate[i] = 0; mus_timer[i] = 0; }
 }
 void music_pause(u8 on){ mus_paused = on ? 1 : 0; }
 void music_volume(u8 v){ mus_master = (v > 15) ? 15 : v; }
@@ -175,8 +175,8 @@ static void sfx_step(void){
   sfx_left = (u8)(d - 1);
 }
 static void audio_tick(void){
-  SndCh o[4]; u8 i, v;
-  for(i = 0; i < 4; i++){
+  SndCh o[MUS_CHANS]; u8 i, v;
+  for(i = 0; i < MUS_CHANS; i++){
     mus_step(i);
     v = (tr[i] && mus_gate[i]) ? tr[i]->vol : 0;
     o[i].period = mus_period[i];
@@ -236,10 +236,17 @@ static void lv_decode(u16 c){
 }
 #endif
 static void lv_paint(u16 c){
-  u8 ay, nt, idx, b;
+  u8 ay, nt, idx, b, rows;
   u16 base;
   lv_decode(c);
   r_column((u8)(c & 63), lv_col, lv->rows);
+  /* ExRAM is one mirrored 32-wide screen. Only columns 0..31 are uploaded;
+     later columns would overwrite that screen. xpal is NULL unless exattr is on. */
+  if(lv->xpal && c < 32){
+    rows = lv->rows;
+    if(rows > BG_H) rows = BG_H;
+    r_excol((u8)c, lv->xpal + c, rows, (u8)((lv->chr_page & 31) << 1));
+  }
   nt = (u8)((c & 63) >> 5);
   base = (u16)((c >> 5) * 64);
   for(ay = 0; ay < 8; ay++){
@@ -262,6 +269,8 @@ void level_load(u8 n){
   if(n >= game_level_count()) n = 0;
   lv = game_level(n);
   lv_on = 1; lv_id = n;
+  r_chr_bank(lv->chr_page);
+  r_exattr(game_exattr());
   tm_map = 0;
   nested = r_in_bulk();
   if(!nested) r_bulk_begin();
@@ -331,6 +340,14 @@ u8 ent_find(const u8 *ents, u8 n, u8 type){
 
 /* ---- main loop ---- */
 void engine_init(void){ mus_master = 12; r_init(); oam = r_oam(); next = game_boot(); }
+void prg_bank(u8 n){ r_prg_bank(n); }
+void chr_bank(u8 n){ r_chr_bank(n); }
+void wram_bank(u8 n){ r_wram_bank(n); }
+u8 wram_banks(void){ return r_wram_banks(); }
+u8 *wram_page(void){ return r_wram_page(); }
+u16 mul8(u8 a, u8 b){ return r_mul8(a, b); }
+void video_split(u8 line){ r_split(line); }
+void video_exattr(u8 on){ r_exattr(on); }
 void engine_frame(u8 raw){
   u8 i;
   pad_pressed = (u8)(raw & ~pad_held); pad_released = (u8)(pad_held & ~raw); pad_held = raw;

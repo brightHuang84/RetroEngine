@@ -7,7 +7,9 @@ GEN  := $(B)/gen
 ENGINE_SRC := engine/engine.c
 GAME_SRC   := $(G)/game.c
 HDRS := engine/engine.h engine/backend.h $(GEN)/assets.h $(GEN)/music.h
-ASSET_SRC := $(G)/tiles.png $(wildcard $(G)/*.txt $(G)/maps/*.txt $(G)/maps/order.txt $(G)/*.csv $(G)/*.legend) tools/png2chr.py tools/png2gba.py tools/map2c.py tools/mappack.py tools/ent2c.py tools/build_assets.py tools/romusage.py
+ASSET_SRC := $(G)/tiles.png $(wildcard $(G)/*.txt $(G)/maps/*.txt $(G)/maps/order.txt $(G)/*.csv $(G)/*.legend) tools/png2chr.py tools/png2gba.py tools/map2c.py tools/mappack.py tools/ent2c.py tools/build_assets.py tools/romusage.py tools/nes_target.py
+# nes.txt selects the mapper. `make NES_MAPPER=nrom` (or mmc5) overrides it.
+NES_MAPPER ?= $(shell python3 tools/nes_target.py $(G))
 MUS_SRC := $(GEN)/music.c
 
 # `all` tries every optional target. A missing toolchain prints "skip <target>"
@@ -53,8 +55,14 @@ all-nes:
 	  $(MAKE) --no-print-directory nes; \
 	else echo "skip nes: cc65, ca65, or ld65 not found (install cc65)"; fi
 
-$(GEN)/assets.h $(GEN)/tiles.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/palette.c $(GEN)/game.chr: $(ASSET_SRC)
-	python3 tools/build_assets.py $(G) $(GEN)
+# Rebuild assets when the mapper changes, and leave the stamp alone when it does not.
+$(GEN)/mapper.tag: FORCE
+	@mkdir -p $(GEN)
+	@printf '%s\n' "$(NES_MAPPER)" > $(GEN)/mapper.tag.tmp
+	@if cmp -s $(GEN)/mapper.tag.tmp $(GEN)/mapper.tag 2>/dev/null; then rm -f $(GEN)/mapper.tag.tmp; else mv $(GEN)/mapper.tag.tmp $(GEN)/mapper.tag; fi
+
+$(GEN)/assets.h $(GEN)/tiles.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/palette.c $(GEN)/game.chr: $(ASSET_SRC) $(GEN)/mapper.tag $(wildcard $(G)/nes.txt)
+	python3 tools/build_assets.py $(G) $(GEN) "$$(cat $(GEN)/mapper.tag)"
 assets: $(GEN)/assets.h
 
 # songs.txt is hand-written. *.fms.txt in the game directory or in music/ is
@@ -100,20 +108,29 @@ $(B)/uefi/$(GAME).img: $(B)/uefi/BOOTX64.EFI tools/mkimg.sh
 	@command -v mcopy >/dev/null 2>&1 && command -v mkfs.fat >/dev/null 2>&1 || { echo "img: mcopy and mkfs.fat not found (install mtools and dosfstools)"; exit 1; }
 	tools/mkimg.sh $< $@
 
-# ---------------- NES (cc65, NROM) ----------------
+# ---------------- NES (cc65). Default mapper is MMC5; NES_MAPPER=nrom keeps NROM. ----------------
 NO := $(B)/nes/obj
 NES_C := $(ENGINE_SRC) $(GAME_SRC) render/render_nes.c platform/nes/main.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
+ifeq ($(NES_MAPPER),nrom)
+NES_CFG := platform/nes/nes.cfg
+NES_DEFS :=
+NES_OVERFLOW := 错误：NES NROM 的 32KB PRG 放不下。这是 mapper 0，没有升级到 UxROM 或 MMC1。
+else
+NES_CFG := platform/nes/mmc5.cfg
+NES_DEFS := -DMMC5
+NES_OVERFLOW := 错误：MMC5 固定代码窗口（CPU $$A000–$$FFFF，24KB）放不下。关卡数据要放在 8KB 的 PRG 窗口里。
+endif
 nes: $(B)/nes/$(GAME).nes
-$(B)/nes/$(GAME).nes: $(NES_C) $(HDRS) platform/nes/nes.h platform/nes/crt0.s platform/nes/upload.s platform/nes/nes.cfg $(GEN)/game.chr
+$(B)/nes/$(GAME).nes: $(NES_C) $(HDRS) platform/nes/nes.h platform/nes/crt0.s platform/nes/upload.s platform/nes/nes.cfg platform/nes/mmc5.cfg $(GEN)/game.chr
 	@command -v cc65 >/dev/null 2>&1 && command -v ca65 >/dev/null 2>&1 && command -v ld65 >/dev/null 2>&1 || { echo "nes: cc65, ca65, and ld65 not found (install cc65)"; exit 1; }
 	@mkdir -p $(NO)
-	for f in $(NES_C); do n=`basename $$f .c`; cc65 -t nes -Oirs -I. -I$(GEN) $$f -o $(NO)/$$n.s || exit 1; \
-	  ca65 -t nes $(NO)/$$n.s -o $(NO)/$$n.o || exit 1; done
-	ca65 -t nes --bin-include-dir $(GEN) platform/nes/crt0.s -o $(NO)/crt0.o
+	for f in $(NES_C); do n=`basename $$f .c`; cc65 -t nes -Oirs $(NES_DEFS) -I. -I$(GEN) $$f -o $(NO)/$$n.s || exit 1; \
+	  ca65 -t nes $(NES_DEFS) $(NO)/$$n.s -o $(NO)/$$n.o || exit 1; done
+	ca65 -t nes $(NES_DEFS) --bin-include-dir $(GEN) platform/nes/crt0.s -o $(NO)/crt0.o
 	ca65 -t nes platform/nes/upload.s -o $(NO)/upload.o
-	ld65 -C platform/nes/nes.cfg -o $@ -m $(B)/nes/$(GAME).map $(NO)/crt0.o $(NO)/upload.o \
+	ld65 -C $(NES_CFG) -o $@ -m $(B)/nes/$(GAME).map $(NO)/crt0.o $(NO)/upload.o \
 	  $(addprefix $(NO)/,$(notdir $(NES_C:.c=.o))) lib/none.lib \
-	  || { echo "错误：NES NROM 的 32KB PRG 放不下。这是 mapper 0，没有升级到 UxROM 或 MMC1。"; exit 1; }
+	  || { echo "$(NES_OVERFLOW)"; exit 1; }
 	python3 tools/romusage.py nes $@ $(B)/nes/$(GAME).map
 
 # ---------------- GBA (arm-none-eabi-gcc; not part of `all`) ----------------
@@ -151,4 +168,4 @@ editor-install:
 
 clean:
 	rm -rf build
-.PHONY: all all-pc all-uefi all-img all-nes games-all assets pc uefi img nes gba gba-auto run editor-install clean
+.PHONY: all all-pc all-uefi all-img all-nes games-all assets pc uefi img nes gba gba-auto run editor-install clean FORCE

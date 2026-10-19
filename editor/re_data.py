@@ -15,6 +15,7 @@ if TOOLS not in sys.path:
     sys.path.insert(0, TOOLS)
 import txt2mus
 import ent2c
+import nes_target
 
 GREY = (0, 85, 170, 255)
 # Same table as render/render_soft.c. Index is the NES color 0..63.
@@ -29,8 +30,8 @@ NES_RGB = [
     0xCCD278, 0xB4DE78, 0xA8E290, 0x98E2B4, 0xA0D6E4, 0xA0A2A0, 0x000000, 0x000000,
 ]
 PAL_NAMES = ['背景 0', '背景 1', '背景 2', '背景 3', '精灵 0', '精灵 1', '精灵 2', '精灵 3']
-CHAN_NAMES = ['pulse1', 'pulse2', 'triangle', 'noise']
-CHAN_LABELS = ['方波 1', '方波 2', '三角波', '噪声']
+CHAN_NAMES = ['pulse1', 'pulse2', 'triangle', 'noise', 'pulse3', 'pulse4']
+CHAN_LABELS = ['方波 1', '方波 2', '三角波', '噪声', 'MMC5 方波 1', 'MMC5 方波 2']
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 CHAR_POOL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%&?~'
 
@@ -102,12 +103,21 @@ class Tiles(object):
     def count(self):
         return (self.h // 8) * 16
 
+    def pages(self):
+        return max(1, (self.h + 127) // 128)
+
+    def add_page(self):
+        if self.pages() >= 16:
+            raise ValueError('最多 16 页（128KB CHR）')
+        self.pixels.extend(bytearray(128 * self.w))
+        self.h += 128
+
 
 def load_tiles(path):
     im = Image.open(path)
     w, h = im.size
-    if w != 128 or h > 128 or h % 8:
-        raise ValueError('%s: sheet must be 128 px wide and a multiple of 8 tall' % path)
+    if w != 128 or h <= 0 or h > 128 * 16 or h % 8:
+        raise ValueError('%s: sheet must be 128 px wide, height a multiple of 8, at most 2048' % path)
     pixels = bytearray(w * h)
     indexed = im.mode == 'P'
     grey = None if indexed else im.convert('L')
@@ -144,6 +154,7 @@ class GameMap(object):
         self.override = None  # None, or h rows of w ints/None
         self.entities = []
         self.music = ''
+        self.tileset = 0
         self.original = ''
 
     def copy_state(self):
@@ -151,7 +162,7 @@ class GameMap(object):
         if self.override is not None:
             ov = [row[:] for row in self.override]
         legs = [(e.char, e.tile, e.pal, e.solid) for e in self.legend]
-        return (tuple(self.rows), tuple(legs), ov, tuple(e.copy() for e in self.entities), self.music)
+        return (tuple(self.rows), tuple(legs), ov, tuple(e.copy() for e in self.entities), self.music, self.tileset)
 
     def restore_state(self, state):
         rows, legs, ov, ents = state[:4]
@@ -161,6 +172,8 @@ class GameMap(object):
         self.entities = [e.copy() for e in ents]
         if len(state) > 4:
             self.music = state[4]
+        if len(state) > 5:
+            self.tileset = int(state[5]) & 15
 
     @property
     def w(self):
@@ -280,6 +293,8 @@ class GameMap(object):
         lines = []
         if self.music:
             lines.append('music %s' % self.music)
+        if self.tileset:
+            lines.append('tileset %d' % (self.tileset & 15))
         lines.append('legend:')
         for e in self.legend:
             line = '%s 0x%02X pal=%d' % (e.char, e.tile, e.pal)
@@ -312,6 +327,11 @@ def load_map(path):
             parts = stripped.split()
             if len(parts) >= 2:
                 gm.music = parts[1]
+            continue
+        if mode is None and stripped.startswith('tileset '):
+            parts = stripped.split()
+            if len(parts) >= 2:
+                gm.tileset = int(parts[1], 0) & 15
             continue
         if raw.strip() in ('legend:', 'map:', 'palmap:', 'entities:'):
             mode = raw.strip()
@@ -458,7 +478,7 @@ class Song(object):
     def __init__(self, name):
         self.name = name
         self.tempo = 120
-        self.ch = [None, None, None, None]
+        self.ch = [None, None, None, None, None, None]
 
     def clone(self):
         s = Song(self.name)
@@ -607,10 +627,12 @@ class Project(object):
         self.code = open(self.code_path).read() if os.path.exists(self.code_path) else ''
         self.entities_path = os.path.join(self.root, 'entities.txt')
         self.entity_spec = ent2c.load_types(self.entities_path)
+        self.nes_path = os.path.join(self.root, 'nes.txt')
+        self.mapper, self.exattr = nes_target.read(self.root)
         self.removed_maps = []
         self.dirty = {
             'palette': False, 'tiles': False, 'maps': False,
-            'songs': False, 'code': False, 'entities': False,
+            'songs': False, 'code': False, 'entities': False, 'nes': False,
         }
 
     def map_by_name(self, name):
@@ -633,6 +655,7 @@ class Project(object):
         else:
             gm.legend = [LegendEntry(e.char, e.tile, e.pal, e.solid) for e in src.legend]
             gm.music = src.music
+            gm.tileset = src.tileset
         fill = gm.legend[0].char if gm.legend else '.'
         gm.rows = [fill * width for _ in range(30)]
         return gm
@@ -658,6 +681,7 @@ class Project(object):
         gm.override = [row[:] for row in src.override] if src.override is not None else None
         gm.entities = [e.copy() for e in src.entities]
         gm.music = src.music
+        gm.tileset = src.tileset
         idx = self.maps.index(src) + 1
         self.maps.insert(idx, gm)
         self.dirty['maps'] = True
@@ -737,6 +761,11 @@ class Project(object):
         if self.dirty['code']:
             open(self.code_path, 'w').write(self.code)
             self.dirty['code'] = False
+        if self.dirty['nes']:
+            name = self.mapper if self.mapper in ('mmc5', 'nrom') else 'mmc5'
+            text = 'mapper %s\nexattr %d\n' % (name, 1 if self.exattr else 0)
+            open(self.nes_path, 'w').write(text)
+            self.dirty['nes'] = False
 
     def any_dirty(self):
         return any(self.dirty.values())
@@ -805,5 +834,6 @@ def create_project(games_dir, name, template_root):
     open(os.path.join(dst, 'maps', 'level.txt'), 'w').write(legend)
     open(os.path.join(dst, 'maps', 'order.txt'), 'w').write(order_text(['level']))
     open(os.path.join(dst, 'songs.txt'), 'w').write(BLANK_SONG)
+    open(os.path.join(dst, 'nes.txt'), 'w').write('mapper mmc5\nexattr 0\n')
     open(os.path.join(dst, 'game.c'), 'w').write(BLANK_GAME_C)
     return dst

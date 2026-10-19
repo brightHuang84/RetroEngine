@@ -28,7 +28,9 @@ HINTS = (
     ('file format not recognized', 'objcopy 版本不兼容。请使用仓库里的 tools/uefi_link.sh（已用 --output-target）。'),
     ('arm-none-eabi-gcc: not found', '缺少 GBA 工具链。安装：sudo apt install gcc-arm-none-eabi'),
     ('No such file or directory', '有源文件缺失。先确认游戏目录里有 game.c、tiles.png、palette.txt。'),
-    ('32KB PRG 放不下', 'NES 的 NROM 只有 32KB PRG。关卡压缩后仍然放不下。保持 mapper 0，没有改成 UxROM 或 MMC1。'),
+    ('32KB PRG 放不下', 'NES 的 NROM 只有 32KB PRG。关卡压缩后仍然放不下。要更大的 ROM，把编译页的 mapper 改成 MMC5。'),
+    ('固定代码窗口', 'MMC5 的代码、音乐和关卡表要放进 $A000–$FFFF 的 24KB。关卡压缩数据放在 8KB 的 PRG 窗口。'),
+    ('8KB PRG 窗口放不下', '这一关的压缩数据超过 8KB，一个 PRG 窗口装不下。'),
     ('高度必须是', '地图高度固定 30 行。'),
     ('宽度必须是', '地图宽度要在 1 到 512 列。'),
 )

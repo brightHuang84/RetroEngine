@@ -19,8 +19,8 @@ static const unsigned noise_timer[16] = {
 };
 /* NES duty sequences, bit 0 is the first step. */
 static const unsigned char DUTY_SEQ[4] = { 0x02, 0x06, 0x1E, 0xF9 };
-static unsigned pulse_acc[2], tri_acc, noise_acc;
-static unsigned char pulse_step[2], tri_step;
+static unsigned pulse_acc[4], tri_acc, noise_acc;
+static unsigned char pulse_step[4], tri_step;
 static unsigned short lfsr = 1;
 
 static int pulse_bit(int idx, unsigned period, unsigned duty){
@@ -61,9 +61,9 @@ static int noise_bit(unsigned idx, unsigned mode){
   return (lfsr & 1) ? 0 : 1;
 }
 static void mix_n(Sint16 *dst, int n){
-  unsigned per[4], vol[4], duty[4];
+  unsigned per[6], vol[6], duty[6];
   int i, s;
-  for(i = 0; i < 4; i++){
+  for(i = 0; i < 6; i++){
     per[i] = soft_period[i]; vol[i] = soft_vol[i]; duty[i] = soft_duty[i];
   }
   for(s = 0; s < n; s++){
@@ -75,6 +75,10 @@ static void mix_n(Sint16 *dst, int n){
       bit = noise_bit(per[3], duty[3] & 1);
       mix += (bit ? (int)vol[3] : -(int)vol[3]) * 200;
     }
+    /* MMC5 pulses. A zero volume does not advance the oscillator, so a song
+       that leaves these channels silent produces the same samples as before. */
+    if(vol[4]){ bit = pulse_bit(2, per[4], duty[4]); mix += (bit ? (int)vol[4] : -(int)vol[4]) * 320; }
+    if(vol[5]){ bit = pulse_bit(3, per[5], duty[5]); mix += (bit ? (int)vol[5] : -(int)vol[5]) * 320; }
     if(mix > 32767) mix = 32767;
     if(mix < -32768) mix = -32768;
     dst[s] = (Sint16)mix;

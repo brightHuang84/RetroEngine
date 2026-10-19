@@ -1,13 +1,17 @@
 /* Software renderer emulating the NES PPU model (2 nametables 64x30, attributes,
    64 sprites with flip). No libc/malloc: used by SDL and UEFI. */
 #include "render_soft.h"
-extern const u8 chr_tiles[4096];              /* generated per game by tools/png2chr.py */
+extern const u8 chr_tiles[];                 /* generated per game by tools/png2chr.py; one page is 4096 bytes */
 static u8 nt[BG_H][BG_W];
 static u8 at[2][64];
 static u8 pal[32];
 static u8 oam[256];
 static u16 scroll;
-volatile u16 soft_period[4]; volatile u8 soft_vol[4]; volatile u8 soft_duty[4];
+static u8 chr_page, ex_on;
+static u8 ex_pal[30][32];
+static u8 wram_mem[8 * 8192];
+static u8 wram_cur;
+volatile u16 soft_period[6]; volatile u8 soft_vol[6]; volatile u8 soft_duty[6];
 static const uint32_t nes_rgb[64] = {
  0x545454,0x001E74,0x081090,0x300088,0x440064,0x5C0030,0x540400,0x3C1800,0x202A00,0x083A00,0x004000,0x003C00,0x00323C,0,0,0,
  0x989698,0x084CC4,0x3032EC,0x5C1EE4,0x8814B0,0xA01464,0x982220,0x783C00,0x545A00,0x287200,0x087C00,0x007628,0x006678,0,0,0,
@@ -27,13 +31,27 @@ void r_bulk_begin(void){}
 void r_bulk_end(void){}
 u8 r_in_bulk(void){ return 0; }
 u8 *r_oam(void){ return oam; }
+void r_prg_bank(u8 bank){ (void)bank; }
+void r_chr_bank(u8 page){ chr_page = page; }
+void r_wram_bank(u8 bank){ wram_cur = (u8)(bank & 7); }
+u8 r_wram_banks(void){ return 8; }
+u8 *r_wram_page(void){ return wram_mem + (unsigned)wram_cur * 8192u; }
+u16 r_mul8(u8 a, u8 b){ return (u16)((u16)a * (u16)b); }
+void r_split(u8 line){ (void)line; }
+void r_exattr(u8 on){ ex_on = on ? 1 : 0; }
+void r_excol(u8 x, const u8 *src, u8 rows, u8 chr_bits){
+  u8 y;
+  (void)chr_bits;
+  if(!src || x >= 32) return;
+  for(y = 0; y < rows && y < 30; y++) ex_pal[y][x] = (u8)(src[(u16)y * 32] & 3);
+}
 void snd_hw(const SndCh *ch){
   u8 i;
-  for(i = 0; i < 4; i++){ soft_period[i] = ch[i].period; soft_vol[i] = ch[i].vol; soft_duty[i] = ch[i].duty; }
+  for(i = 0; i < 6; i++){ soft_period[i] = ch[i].period; soft_vol[i] = ch[i].vol; soft_duty[i] = ch[i].duty; }
 }
 
 static int px_of(u8 tile, int r, int c){
-  const u8 *t = &chr_tiles[tile * 16];
+  const u8 *t = &chr_tiles[(unsigned)chr_page * 4096u + (unsigned)tile * 16u];
   return ((t[r] >> (7 - c)) & 1) | (((t[r + 8] >> (7 - c)) & 1) << 1);
 }
 void soft_compose(uint32_t *fb){
@@ -43,7 +61,7 @@ void soft_compose(uint32_t *fb){
     for(x = 0; x < SCREEN_W; x++){
       int wx = (x + scroll) & 511, tx = wx >> 3, pg = tx >> 5, lx = tx & 31;
       int a = at[pg][(ty >> 2) * 8 + (lx >> 2)];
-      int p = (a >> (((ty & 2) ? 4 : 0) + ((lx & 2) ? 2 : 0))) & 3;
+      int p = ex_on ? ex_pal[ty][lx] : ((a >> (((ty & 2) ? 4 : 0) + ((lx & 2) ? 2 : 0))) & 3);
       int v = px_of(nt[ty][tx], r, wx & 7);
       fb[y * SCREEN_W + x] = nes_rgb[v ? pal[p * 4 + v] : pal[0]];
     }

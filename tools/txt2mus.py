@@ -28,8 +28,11 @@ import os
 import sys
 
 NOTE = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}
-CHANS = {'pulse1': 0, 'pulse2': 1, 'triangle': 2, 'tri': 2, 'noise': 3}
-CNAME = ['pulse1', 'pulse2', 'triangle', 'noise']
+CHANS = {
+    'pulse1': 0, 'pulse2': 1, 'triangle': 2, 'tri': 2, 'noise': 3,
+    'pulse3': 4, 'pulse4': 5, 'mmc5pulse1': 4, 'mmc5pulse2': 5,
+}
+CNAME = ['pulse1', 'pulse2', 'triangle', 'noise', 'pulse3', 'pulse4']
 
 
 def quarter_frames(tempo):
@@ -106,7 +109,7 @@ class Song(object):
     def __init__(self, name):
         self.name = name
         self.tempo = 120
-        self.ch = [None, None, None, None]
+        self.ch = [None, None, None, None, None, None]
 
 
 def strip_comment(line):
@@ -228,7 +231,7 @@ def emit(songs, out_dir, src_name):
         q = quarter_frames(song.tempo)
         c.append('/* song %s  tempo %d  quarter %d frames */' % (song.name, song.tempo, q))
         lengths = []
-        ptrs = ['0', '0', '0', '0']
+        ptrs = ['0', '0', '0', '0', '0', '0']
         for ci, ch in enumerate(song.ch):
             if ch is None or not ch.events:
                 continue
