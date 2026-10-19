@@ -16,6 +16,8 @@ if TOOLS not in sys.path:
 import txt2mus
 import ent2c
 import nes_target
+import scriptc
+import animc
 
 GREY = (0, 85, 170, 255)
 # Same table as render/render_soft.c. Index is the NES color 0..63.
@@ -629,10 +631,15 @@ class Project(object):
         self.entity_spec = ent2c.load_types(self.entities_path)
         self.nes_path = os.path.join(self.root, 'nes.txt')
         self.mapper, self.exattr = nes_target.read(self.root)
+        self.scripts_path = os.path.join(self.root, 'scripts.json')
+        self.anims_path = os.path.join(self.root, 'anims.json')
+        self.scripts = scriptc.load(self.scripts_path)
+        self.anims = animc.load(self.anims_path)
         self.removed_maps = []
         self.dirty = {
             'palette': False, 'tiles': False, 'maps': False,
             'songs': False, 'code': False, 'entities': False, 'nes': False,
+            'scripts': False, 'anims': False,
         }
 
     def map_by_name(self, name):
@@ -766,6 +773,12 @@ class Project(object):
             text = 'mapper %s\nexattr %d\n' % (name, 1 if self.exattr else 0)
             open(self.nes_path, 'w').write(text)
             self.dirty['nes'] = False
+        if self.dirty['scripts']:
+            open(self.scripts_path, 'w').write(scriptc.dump(self.scripts))
+            self.dirty['scripts'] = False
+        if self.dirty['anims']:
+            open(self.anims_path, 'w').write(animc.dump(self.anims))
+            self.dirty['anims'] = False
 
     def any_dirty(self):
         return any(self.dirty.values())
@@ -836,4 +849,6 @@ def create_project(games_dir, name, template_root):
     open(os.path.join(dst, 'songs.txt'), 'w').write(BLANK_SONG)
     open(os.path.join(dst, 'nes.txt'), 'w').write('mapper mmc5\nexattr 0\n')
     open(os.path.join(dst, 'game.c'), 'w').write(BLANK_GAME_C)
+    open(os.path.join(dst, 'scripts.json'), 'w').write(scriptc.dump(scriptc.empty_doc()))
+    open(os.path.join(dst, 'anims.json'), 'w').write(animc.dump(animc.empty_doc()))
     return dst

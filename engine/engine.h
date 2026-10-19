@@ -147,4 +147,57 @@ void video_exattr(u8 on);                     /* per-8x8 palette via MMC5 ExRAM.
 #define ent_y(p) ((p)[3])
 #define ent_prop(p, n) ((u16)((p)[4 + (u16)(n) * 2] | ((u16)(p)[5 + (u16)(n) * 2] << 8)))
 u8 ent_find(const u8 *ents, u8 n, u8 type);
+
+/* ---------- scripts (bytecode from scripts.json; empty tables if the file is absent) ---------- */
+#define SEV_BOOT 1
+#define SEV_LEVEL 2
+#define SEV_FRAME 3
+#define SEV_BUTTON 4
+#define SEV_TOUCH 5
+#define SEV_TILE 6
+#define SEV_ENTITY 7
+#define SEV_TIMER 8
+#define SEV_VAR 9
+#define SEV_REGION 10
+#define SREQ_ADVANCE 1
+#define SREQ_HURT 2
+#define SREQ_WIN 4
+#define SREQ_LOSE 8
+#define SREQ_LEVEL 16
+#define SREQ_SCENE 32
+#define SCRIPT_GLOBAL 0
+#define SCRIPT_LEVEL 1
+void script_reset(void);
+void script_level_reset(void);
+void script_enable(u8 on);
+void script_set_level(u8 n);
+void script_set(u8 scope, u8 idx, u16 v);
+u16  script_get(u8 scope, u8 idx);
+void script_bind(u8 slot);
+void script_set_hook(u8 id, void (*fn)(u8));
+u8   script_taken(u8 slot);
+u8   script_emit(u8 ev, u8 arg);              /* returns how many scripts started */
+u8   script_listening(u8 ev, u8 arg);
+void script_update(void);                     /* waits, timers, per-frame and button scripts */
+void script_region_at(s16 x, s16 y);
+void script_touch_map(s16 x, s16 y, u8 w, u8 h);
+void script_draw(void);                       /* sprite text while a message is up */
+u8   script_pull(u8 mask);                    /* read and clear request flags */
+s8   script_shake(void);
+u8   script_level_target(void);
+u8   script_scene(void);
+void script_actor_put(u8 slot, u8 type, u16 x, u8 y);
+u8   script_actor_on(u8 slot);
+u16  script_actor_x(u8 slot);
+u8   script_actor_y(u8 slot);
+u8   script_actor_type(u8 slot);
+
+/* ---------- sprite animation (anims.json). Slot 255 / ANIM_NONE means stopped. ---------- */
+void anim_reset(void);
+void anim_play(u8 slot, u8 id);               /* same id keeps the current frame */
+void anim_restart(u8 slot);
+u8   anim_current(u8 slot);
+void anim_update(void);
+void anim_draw(u8 slot, s16 x, s16 y, u8 flip);
+u8   anim_for_type(u8 type);                  /* default from anims.json, or 255 */
 #endif

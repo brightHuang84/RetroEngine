@@ -1,0 +1,117 @@
+{
+  "variables": [
+    {"name": "got", "scope": "level", "size": "u8", "init": 0},
+    {"name": "need", "scope": "level", "size": "u8", "init": 0},
+    {"name": "door", "scope": "level", "size": "u8", "init": 0},
+    {"name": "shown", "scope": "level", "size": "u8", "init": 0}
+  ],
+  "strings": ["HI", "OPEN"],
+  "hooks": ["score"],
+  "regions": [],
+  "scripts": [
+    {
+      "name": "拾取硬币",
+      "event": "touch",
+      "level": "",
+      "entity": "coin",
+      "button": "a",
+      "timer": 0,
+      "var": "",
+      "value": 0,
+      "region": "",
+      "tile": 0,
+      "other": "",
+      "blocks": [
+        {"op": "add", "var": "got", "value": 1},
+        {"op": "hook", "id": "score", "arg": 100},
+        {"op": "sfx", "id": "coin"},
+        {"op": "despawn"},
+        {
+          "op": "if",
+          "cmp": "eq",
+          "var": "got",
+          "value": 0,
+          "var2": "need",
+          "button": "right",
+          "then": [{"op": "advance"}],
+          "else": []
+        }
+      ]
+    },
+    {
+      "name": "到达终点",
+      "event": "touch",
+      "level": "",
+      "entity": "goal",
+      "button": "a",
+      "timer": 0,
+      "var": "",
+      "value": 0,
+      "region": "",
+      "tile": 0,
+      "other": "",
+      "blocks": [
+        {"op": "advance"}
+      ]
+    },
+    {
+      "name": "告示牌",
+      "event": "touch",
+      "level": "level2",
+      "entity": "sign",
+      "button": "a",
+      "timer": 0,
+      "var": "",
+      "value": 0,
+      "region": "",
+      "tile": 0,
+      "other": "",
+      "blocks": [
+        {
+          "op": "if",
+          "cmp": "eq",
+          "var": "shown",
+          "value": 0,
+          "var2": "",
+          "button": "right",
+          "then": [
+            {"op": "set", "var": "shown", "value": 1},
+            {"op": "text", "text": "HI", "frames": 90},
+            {"op": "sfx", "id": "blip"}
+          ],
+          "else": []
+        }
+      ]
+    },
+    {
+      "name": "开关开门",
+      "event": "touch",
+      "level": "level2",
+      "entity": "switch",
+      "button": "a",
+      "timer": 0,
+      "var": "",
+      "value": 0,
+      "region": "",
+      "tile": 0,
+      "other": "",
+      "blocks": [
+        {
+          "op": "if",
+          "cmp": "eq",
+          "var": "door",
+          "value": 0,
+          "var2": "",
+          "button": "right",
+          "then": [
+            {"op": "set", "var": "door", "value": 1},
+            {"op": "text", "text": "OPEN", "frames": 90},
+            {"op": "sfx", "id": "blip"},
+            {"op": "shake", "frames": 12}
+          ],
+          "else": []
+        }
+      ]
+    }
+  ]
+}

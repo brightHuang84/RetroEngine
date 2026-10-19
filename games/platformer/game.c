@@ -1,11 +1,14 @@
 /* Platformer demo on retro_engine: run/jump, tile collisions, several levels.
    Level 1 is the original 64-column map. A later level is wider than two
    screens; level_scroll streams columns and the camera follows the player.
-   All coins or the goal opens the next level. The last level wins.
-   Uses only engine.h. */
+   Coins, the goal, the sign and the switch are scripts in scripts.json.
+   Physics, enemies and the HUD stay in this file. game.c can still run the
+   old coin and goal rules when no script is listening. */
 #include "../../engine/engine.h"
 #include "assets.h"
 #include "music.h"
+#include "scripts.h"
+#include "anim.h"
 
 #define T_HEAD 0xA0
 #define T_LEG1 0xA1
@@ -20,8 +23,8 @@
 #define ESLOTS 4
 
 static fx px, py, pvx, pvy;
-static u8 on_ground, facing_left, coins_got, lives, won, anim;
-static u8 ncoins, coin_taken[ENT_MAX];
+static u8 on_ground, facing_left, coins_got, lives, won;
+static u8 ncoins, ndoors, coin_taken[ENT_MAX];
 static s16 start_x, start_y;
 static s16 exs[ESLOTS], eys[ESLOTS], elefts[ESLOTS], erights[ESLOTS];
 static s8 edirs[ESLOTS];
@@ -33,6 +36,7 @@ static void center_text(u8 y, const char *s){ u8 n = 0; while(s[n]) n++; bg_text
 
 /* ---------- title ---------- */
 static void title_init(void){
+  script_enable(0);
   level_load(0);
   center_text(10, "TINY PLATFORMER");
   center_text(13, "COLLECT ALL COINS");
@@ -44,19 +48,36 @@ static void title_draw(void){ spr(120, 120, T_COIN, 1); }
 const Scene title_scene = { title_init, title_update, title_draw };
 
 /* ---------- play ---------- */
-static u8 solid(s16 x, s16 y){ return (u8)(tm_flags_at(x, y) & TF_SOLID); }
+static u8 door_blocks(s16 x, s16 y){
+  u8 i, n;
+  const u8 *ents, *e;
+  s16 ex;
+  if(!ndoors || script_get(SCRIPT_LEVEL, VAR_DOOR)) return 0;
+  ents = level_ents(); n = level_ent_n();
+  if(!ents) return 0;
+  for(i = 0; i < n; i++){
+    e = ent_ptr(ents, i);
+    if(ent_type(e) != ENT_DOOR) continue;
+    ex = (s16)ent_x(e);
+    if(x >= ex && x < (s16)(ex + 8) && y >= ent_y(e) && y < (s16)(ent_y(e) + 16)) return 1;
+  }
+  return 0;
+}
+static u8 solid(s16 x, s16 y){ return (u8)((tm_flags_at(x, y) & TF_SOLID) || door_blocks(x, y)); }
 static void enemies_clear(void){ u8 i; for(i = 0; i < ESLOTS; i++) ealive[i] = 0; }
 static void load_spawns(void){
   u8 i, slot, n;
   const u8 *e, *ents;
-  start_x = 16; start_y = 192; ncoins = 0;
+  start_x = 16; start_y = 192; ncoins = 0; ndoors = 0;
   enemies_clear();
   ents = level_ents(); n = level_ent_n();
   for(i = 0; i < ENT_MAX; i++) coin_taken[i] = 0;
   slot = ent_find(ents, n, ENT_PLAYER);
   if(slot != 255){ e = ent_ptr(ents, slot); start_x = (s16)ent_x(e); start_y = ent_y(e); }
-  for(i = 0; i < n; i++)
+  for(i = 0; i < n; i++){
     if(ent_type(ent_ptr(ents, i)) == ENT_COIN) ncoins++;
+    if(ent_type(ent_ptr(ents, i)) == ENT_DOOR) ndoors++;
+  }
 }
 static void respawn(void){ px = FX(start_x); py = FX(start_y); pvx = 0; pvy = 0; facing_left = 0; }
 static u8 enemy_tracked(u8 slot){
@@ -89,20 +110,29 @@ static void enemies_spawn(void){
     exs[free] = wx; eys[free] = ent_y(e);
     elefts[free] = (s16)ent_prop(e, 0); erights[free] = (s16)ent_prop(e, 1);
     edirs[free] = 1;
+    anim_play((u8)(1 + free), ANIM_WALK);
   }
 }
 static void begin_level(u8 n){
   level_load(n);
+  script_level_reset();
+  script_set_level(n);
   load_spawns();
+  script_set(SCRIPT_LEVEL, VAR_NEED, ncoins);
   coins_got = 0; cam = 0;
   respawn();
   enemies_spawn();
   level_scroll(cam);
   music_play(level_music());
+  script_enable(1);
+  script_emit(SEV_LEVEL, n);
 }
+static void add_score(u8 n){ score = (u16)(score + n); }
 static void play_init(void){
   u8 n = 0;
   long pix, lim, maxc;
+  script_reset();
+  script_set_hook(HOOK_SCORE, add_score);
   score = 0; lives = 3;
   if(test_level != 255 && test_level < level_count()) n = test_level;
   begin_level(n);
@@ -172,23 +202,64 @@ static u8 hit_goal(s16 x, s16 y){
   }
   return 0;
 }
+static void touch_kind(s16 x, s16 y, u8 type, u8 w, u8 h){
+  u8 i, n;
+  const u8 *ents, *e;
+  if(!script_listening(SEV_TOUCH, type)) return;
+  ents = level_ents(); n = level_ent_n();
+  if(!ents) return;
+  for(i = 0; i < n; i++){
+    e = ent_ptr(ents, i);
+    if(ent_type(e) != type || script_taken(i)) continue;
+    if(!aabb(x, y, 8, 16, (s16)ent_x(e), ent_y(e), w, h)) continue;
+    script_bind(i);
+    script_emit(SEV_TOUCH, type);
+  }
+}
+static u8 pull_script(void){
+  script_update();
+  if(script_pull(SREQ_HURT)){ lose_life(); return 1; }
+  if(script_pull(SREQ_WIN)){ won = 1; sfx(SFX_WIN); scene_go(&end_scene); return 1; }
+  if(script_pull(SREQ_LOSE)){ won = 0; scene_go(&end_scene); return 1; }
+  if(script_pull(SREQ_LEVEL)){ begin_level(script_level_target()); return 1; }
+  if(script_pull(SREQ_ADVANCE)){ advance(); return 1; }
+  if(script_pull(SREQ_SCENE)){
+    if(script_scene() == 0) scene_go(&title_scene);
+    else if(script_scene() == 2) scene_go(&end_scene);
+    return 1;
+  }
+  return 0;
+}
 static void play_update(void){
   u8 i, n, s;
   s16 x, y;
   const u8 *ents, *e;
   long cx, maxc;
+  s8 sh;
   move_player();
   x = FX_INT(px); y = FX_INT(py);
-  if(pvx) anim++;
   ents = level_ents(); n = level_ent_n();
   for(i = 0; i < n; i++){
     e = ent_ptr(ents, i);
     if(ent_type(e) != ENT_COIN || coin_taken[i]) continue;
-    if(aabb(x, y, 8, 16, (s16)ent_x(e), ent_y(e), 8, 8)){
-      coin_taken[i] = 1; ++coins_got; score += 100; sfx(SFX_COIN);
+    if(!aabb(x, y, 8, 16, (s16)ent_x(e), ent_y(e), 8, 8)) continue;
+    script_bind(i);
+    if(script_listening(SEV_TOUCH, ENT_COIN)){
+      script_emit(SEV_TOUCH, ENT_COIN);
+      if(script_taken(i)) coin_taken[i] = 1;
+      coins_got = (u8)script_get(SCRIPT_LEVEL, VAR_GOT);
+    } else {
+      coin_taken[i] = 1; ++coins_got; add_score(100); sfx(SFX_COIN);
     }
   }
-  if(hit_goal(x, y) || (ncoins && coins_got == ncoins)){ advance(); return; }
+  if(hit_goal(x, y)){
+    if(!script_listening(SEV_TOUCH, ENT_GOAL)){ advance(); return; }
+    script_emit(SEV_TOUCH, ENT_GOAL);
+  }
+  touch_kind(x, y, ENT_SIGN, 8, 8);
+  touch_kind(x, y, ENT_SWITCH, 8, 8);
+  if(pull_script()) return;
+  if(!script_listening(SEV_TOUCH, ENT_COIN) && ncoins && coins_got == ncoins){ advance(); return; }
   enemies_spawn();
   for(s = 0; s < ESLOTS; s++){
     if(!ealive[s]) continue;
@@ -197,7 +268,7 @@ static void play_update(void){
       if(exs[s] < elefts[s] || exs[s] > erights[s]) edirs[s] = (s8)-edirs[s];
     }
     if(aabb(x, y, 8, 16, exs[s], eys[s], 8, 8)){
-      if(pvy > 0 && y + 12 < eys[s]){ ealive[s] = 0; score += 50; pvy = JUMP_V / 2; sfx(SFX_HIT); }
+      if(pvy > 0 && y + 12 < eys[s]){ ealive[s] = 0; add_score(50); pvy = JUMP_V / 2; sfx(SFX_HIT); }
       else lose_life();
     }
   }
@@ -206,19 +277,28 @@ static void play_update(void){
   maxc = (level_cols() > 32) ? (((long)level_cols() - 32L) << 3) : 0L;
   if(cx > maxc) cx = maxc;
   cam = (u16)cx;
-  level_scroll(cam);
+  sh = script_shake();
+  if((s16)cam + sh < 0) sh = (s8)-(s16)cam;
+  level_scroll((u16)((s16)cam + sh));
 }
 static void draw_goal(s16 x, s16 y){
   spr(x, y, T_GOAL, 3); spr((s16)(x + 8), y, T_GOAL, 3);
   spr(x, (s16)(y + 8), T_GOAL, 3); spr((s16)(x + 8), (s16)(y + 8), T_GOAL, 3);
 }
+static void sync_anim(void){
+  u8 pose;
+  if(!on_ground) pose = ANIM_JUMP;
+  else if(pvx) pose = ANIM_RUN;
+  else pose = ANIM_IDLE;
+  anim_play(0, pose);
+  anim_update();
+}
 static void play_draw(void){
-  u8 i, a, n, s;
+  u8 i, n, s, typ;
   s16 x = FX_INT(px) - (s16)cam, y = FX_INT(py);
   const u8 *ents, *e;
-  a = facing_left ? SPR_FLIPH : 0;
-  spr(x, y, T_HEAD, a);
-  spr(x, y + 8, (on_ground && pvx && (anim & 8)) ? T_LEG2 : T_LEG1, a);
+  sync_anim();
+  anim_draw(0, x, y, facing_left ? SPR_FLIPH : 0);
   /* HUD as sprites (background scrolls) - max 8 sprites per scanline on NES */
   spr_number(8, 8, score, 5, 3);
   spr(8, 20, T_COIN, 1); spr_number(20, 20, coins_got, 1, 3); spr(28, 20, '/', 3); spr_number(36, 20, ncoins, 1, 3);
@@ -226,16 +306,25 @@ static void play_draw(void){
   ents = level_ents(); n = level_ent_n();
   for(i = 0; i < n; i++){
     e = ent_ptr(ents, i);
-    if(ent_type(e) == ENT_COIN && !coin_taken[i]) spr((s16)ent_x(e) - (s16)cam, ent_y(e), T_COIN, 1);
-    if(ent_type(e) == ENT_GOAL) draw_goal((s16)ent_x(e) - (s16)cam, ent_y(e));
+    typ = ent_type(e);
+    if(typ == ENT_COIN && !coin_taken[i]) spr((s16)ent_x(e) - (s16)cam, ent_y(e), T_COIN, 1);
+    if(typ == ENT_GOAL) draw_goal((s16)ent_x(e) - (s16)cam, ent_y(e));
+    if(typ == ENT_SIGN) spr((s16)ent_x(e) - (s16)cam, ent_y(e), 0x21, 3);
+    if(typ == ENT_SWITCH) spr((s16)ent_x(e) - (s16)cam, ent_y(e), 0x53, 2);
+    if(typ == ENT_DOOR && !script_get(SCRIPT_LEVEL, VAR_DOOR)){
+      spr((s16)ent_x(e) - (s16)cam, ent_y(e), T_GOAL, 1);
+      spr((s16)ent_x(e) - (s16)cam, (s16)(ent_y(e) + 8), T_GOAL, 1);
+    }
   }
   for(s = 0; s < ESLOTS; s++)
-    if(ealive[s]) spr(exs[s] - (s16)cam, eys[s], T_ENEMY, (u8)(2 | ((frame_count & 16) ? SPR_FLIPH : 0)));
+    if(ealive[s]) anim_draw((u8)(1 + s), (s16)(exs[s] - (s16)cam), eys[s], 0);
+  script_draw();
 }
 const Scene play_scene = { play_init, play_update, play_draw };
 
 /* ---------- end ---------- */
 static void end_init(void){
+  script_enable(0);
   music_stop();
   bg_fill(0, 0, 32, 30, ' ');
   center_text(11, won ? "YOU WIN!" : "GAME OVER");

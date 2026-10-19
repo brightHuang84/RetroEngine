@@ -339,7 +339,7 @@ u8 ent_find(const u8 *ents, u8 n, u8 type){
 }
 
 /* ---- main loop ---- */
-void engine_init(void){ mus_master = 12; r_init(); oam = r_oam(); next = game_boot(); }
+void engine_init(void){ mus_master = 12; r_init(); oam = r_oam(); anim_reset(); script_reset(); next = game_boot(); }
 void prg_bank(u8 n){ r_prg_bank(n); }
 void chr_bank(u8 n){ r_chr_bank(n); }
 void wram_bank(u8 n){ r_wram_bank(n); }

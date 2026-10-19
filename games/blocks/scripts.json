@@ -1,0 +1,58 @@
+{
+  "variables": [],
+  "strings": ["GOT IT"],
+  "hooks": [],
+  "regions": [],
+  "scripts": [
+    {
+      "name": "向右走",
+      "event": "frame",
+      "level": "",
+      "entity": "",
+      "button": "right",
+      "timer": 0,
+      "var": "",
+      "value": 0,
+      "region": "",
+      "tile": 0,
+      "other": "",
+      "blocks": [
+        {
+          "op": "if",
+          "cmp": "held",
+          "var": "",
+          "value": 0,
+          "var2": "",
+          "button": "right",
+          "then": [
+            {"op": "move", "actor": 0, "dx": 1, "dy": 0},
+            {"op": "anim", "actor": 0, "id": "run"}
+          ],
+          "else": [
+            {"op": "anim", "actor": 0, "id": "idle"}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "捡到硬币",
+      "event": "touch",
+      "level": "",
+      "entity": "coin",
+      "button": "a",
+      "timer": 0,
+      "var": "",
+      "value": 0,
+      "region": "",
+      "tile": 0,
+      "other": "",
+      "blocks": [
+        {"op": "sfx", "id": "coin"},
+        {"op": "despawn"},
+        {"op": "text", "text": "GOT IT", "frames": 120},
+        {"op": "wait", "frames": 20},
+        {"op": "win"}
+      ]
+    }
+  ]
+}

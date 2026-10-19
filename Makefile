@@ -4,10 +4,11 @@ GAME ?= breakout
 G    := games/$(GAME)
 B    := build/$(GAME)
 GEN  := $(B)/gen
-ENGINE_SRC := engine/engine.c
+ENGINE_SRC := engine/engine.c engine/script.c engine/anim.c
 GAME_SRC   := $(G)/game.c
-HDRS := engine/engine.h engine/backend.h $(GEN)/assets.h $(GEN)/music.h
-ASSET_SRC := $(G)/tiles.png $(wildcard $(G)/*.txt $(G)/maps/*.txt $(G)/maps/order.txt $(G)/*.csv $(G)/*.legend) tools/png2chr.py tools/png2gba.py tools/map2c.py tools/mappack.py tools/ent2c.py tools/build_assets.py tools/romusage.py tools/nes_target.py
+HDRS := engine/engine.h engine/backend.h $(GEN)/assets.h $(GEN)/music.h $(GEN)/scripts.h $(GEN)/anim.h
+GEN_C := $(GEN)/scriptdata.c $(GEN)/animdata.c
+ASSET_SRC := $(G)/tiles.png $(wildcard $(G)/*.txt $(G)/maps/*.txt $(G)/maps/order.txt $(G)/*.csv $(G)/*.legend $(G)/scripts.json $(G)/anims.json) tools/png2chr.py tools/png2gba.py tools/map2c.py tools/mappack.py tools/ent2c.py tools/build_assets.py tools/romusage.py tools/nes_target.py tools/scriptc.py tools/animc.py
 # nes.txt selects the mapper. `make NES_MAPPER=nrom` (or mmc5) overrides it.
 NES_MAPPER ?= $(shell python3 tools/nes_target.py $(G))
 MUS_SRC := $(GEN)/music.c
@@ -23,6 +24,7 @@ all:
 games-all:
 	$(MAKE) GAME=breakout all
 	$(MAKE) GAME=platformer all
+	$(MAKE) GAME=blocks all
 
 all-pc:
 	@if command -v sdl2-config >/dev/null 2>&1; then $(MAKE) --no-print-directory pc; \
@@ -61,7 +63,7 @@ $(GEN)/mapper.tag: FORCE
 	@printf '%s\n' "$(NES_MAPPER)" > $(GEN)/mapper.tag.tmp
 	@if cmp -s $(GEN)/mapper.tag.tmp $(GEN)/mapper.tag 2>/dev/null; then rm -f $(GEN)/mapper.tag.tmp; else mv $(GEN)/mapper.tag.tmp $(GEN)/mapper.tag; fi
 
-$(GEN)/assets.h $(GEN)/tiles.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/palette.c $(GEN)/game.chr: $(ASSET_SRC) $(GEN)/mapper.tag $(wildcard $(G)/nes.txt)
+$(GEN)/assets.h $(GEN)/tiles.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/palette.c $(GEN)/game.chr $(GEN)/scriptdata.c $(GEN)/scripts.h $(GEN)/animdata.c $(GEN)/anim.h: $(ASSET_SRC) $(GEN)/mapper.tag $(wildcard $(G)/nes.txt)
 	python3 tools/build_assets.py $(G) $(GEN) "$$(cat $(GEN)/mapper.tag)"
 assets: $(GEN)/assets.h
 
@@ -75,7 +77,7 @@ $(GEN)/music.c $(GEN)/music.h: $(MUS_IN) tools/txt2mus.py tools/fms2mus.py
 	python3 tools/txt2mus.py $(GEN)/songs.gen.txt $(GEN)
 
 # ---------------- PC / SDL2 ----------------
-PC_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_soft.c platform/sdl/main_sdl.c $(GEN)/tiles.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
+PC_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_soft.c platform/sdl/main_sdl.c $(GEN)/tiles.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC) $(GEN_C)
 pc: $(B)/pc/$(GAME)
 $(B)/pc/$(GAME): $(PC_SRC) $(HDRS) render/render_soft.h
 	@command -v sdl2-config >/dev/null 2>&1 || { echo "pc: sdl2-config not found (install libsdl2-dev)"; exit 1; }
@@ -91,7 +93,7 @@ $(B)/pc/$(GAME): $(PC_SRC) $(HDRS) render/render_soft.h
 EFI_CFLAGS := -O2 -std=c99 -Wall -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns \
   -I. -I$(GEN) -fpic -fshort-wchar -fno-stack-protector -fno-strict-aliasing \
   -mno-red-zone -maccumulate-outgoing-args -mno-sse -mno-mmx -DEFI_FUNCTION_WRAPPER -DGNU_EFI_USE_MS_ABI
-EFI_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_soft.c platform/uefi/main_uefi.c $(GEN)/tiles.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
+EFI_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_soft.c platform/uefi/main_uefi.c $(GEN)/tiles.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC) $(GEN_C)
 EFI_OBJ := $(addprefix $(B)/uefi/obj/,$(notdir $(EFI_SRC:.c=.o)))
 uefi: $(B)/uefi/BOOTX64.EFI
 $(B)/uefi/BOOTX64.EFI: $(EFI_SRC) $(HDRS) render/render_soft.h tools/uefi_probe.sh tools/uefi_link.sh
@@ -110,7 +112,7 @@ $(B)/uefi/$(GAME).img: $(B)/uefi/BOOTX64.EFI tools/mkimg.sh
 
 # ---------------- NES (cc65). Default mapper is MMC5; NES_MAPPER=nrom keeps NROM. ----------------
 NO := $(B)/nes/obj
-NES_C := $(ENGINE_SRC) $(GAME_SRC) render/render_nes.c platform/nes/main.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
+NES_C := $(ENGINE_SRC) $(GAME_SRC) render/render_nes.c platform/nes/main.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC) $(GEN_C)
 ifeq ($(NES_MAPPER),nrom)
 NES_CFG := platform/nes/nes.cfg
 NES_DEFS :=
@@ -124,7 +126,7 @@ nes: $(B)/nes/$(GAME).nes
 $(B)/nes/$(GAME).nes: $(NES_C) $(HDRS) platform/nes/nes.h platform/nes/crt0.s platform/nes/upload.s platform/nes/nes.cfg platform/nes/mmc5.cfg $(GEN)/game.chr
 	@command -v cc65 >/dev/null 2>&1 && command -v ca65 >/dev/null 2>&1 && command -v ld65 >/dev/null 2>&1 || { echo "nes: cc65, ca65, and ld65 not found (install cc65)"; exit 1; }
 	@mkdir -p $(NO)
-	for f in $(NES_C); do n=`basename $$f .c`; cc65 -t nes -Oirs $(NES_DEFS) -I. -I$(GEN) $$f -o $(NO)/$$n.s || exit 1; \
+	for f in $(NES_C); do n=`basename $$f .c`; cc65 -t nes -Ors $(NES_DEFS) -I. -I$(GEN) $$f -o $(NO)/$$n.s || exit 1; \
 	  ca65 -t nes $(NES_DEFS) $(NO)/$$n.s -o $(NO)/$$n.o || exit 1; done
 	ca65 -t nes $(NES_DEFS) --bin-include-dir $(GEN) platform/nes/crt0.s -o $(NO)/crt0.o
 	ca65 -t nes platform/nes/upload.s -o $(NO)/upload.o
@@ -139,7 +141,7 @@ $(B)/nes/$(GAME).nes: $(NES_C) $(HDRS) platform/nes/nes.h platform/nes/crt0.s pl
 # tools/gbafix.py writes the title and complement (no Nintendo logo).
 GBA_CFLAGS := -marm -mcpu=arm7tdmi -ffreestanding -fno-builtin -fno-unwind-tables \
   -fno-asynchronous-unwind-tables -O2 -std=c99 -Wall -Wextra -fno-strict-aliasing -I. -I$(GEN)
-GBA_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_gba.c platform/gba/main_gba.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC)
+GBA_SRC := $(ENGINE_SRC) $(GAME_SRC) render/render_gba.c platform/gba/main_gba.c $(GEN)/tiles_gba.c $(GEN)/maps.c $(GEN)/palette.c $(MUS_SRC) $(GEN_C)
 GBA_DEPS := $(GBA_SRC) $(HDRS) platform/gba/crt0.s platform/gba/gba.ld platform/gba/gba.h tools/gbafix.py
 
 define build_gba

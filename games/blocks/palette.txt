@@ -1,0 +1,11 @@
+# Platformer NES palette. Eight rows of four indices (00-3F):
+# BG0 BG1 BG2 BG3, then sprite 0..3.
+# Background color 0 uses only the first entry of BG0 (the shared backdrop).
+21 1A 2A 0A
+21 07 17 2A
+21 00 10 30
+21 30 30 30
+21 16 27 37
+21 18 28 38
+21 0F 16 30
+21 30 30 30

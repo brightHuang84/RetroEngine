@@ -1,0 +1,38 @@
+{
+  "metas": [
+    {
+      "name": "hero_stand",
+      "label": "站立",
+      "parts": [
+        {"dx": 0, "dy": 0, "tile": 160, "attr": 0},
+        {"dx": 0, "dy": 8, "tile": 161, "attr": 0}
+      ]
+    },
+    {
+      "name": "hero_step",
+      "label": "迈步",
+      "parts": [
+        {"dx": 0, "dy": 0, "tile": 160, "attr": 0},
+        {"dx": 0, "dy": 8, "tile": 162, "attr": 0}
+      ]
+    }
+  ],
+  "anims": [
+    {
+      "name": "idle",
+      "label": "待机",
+      "loop": true,
+      "frames": [{"meta": "hero_stand", "dur": 20}]
+    },
+    {
+      "name": "run",
+      "label": "跑",
+      "loop": true,
+      "frames": [
+        {"meta": "hero_stand", "dur": 6},
+        {"meta": "hero_step", "dur": 6}
+      ]
+    }
+  ],
+  "defaults": {"player": "idle"}
+}

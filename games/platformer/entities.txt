@@ -22,3 +22,16 @@ type goal id=4 w=16 h=16 pal=3
   sprite 8 0 0x85
   sprite 0 8 0x85
   sprite 8 8 0x85
+
+type sign id=5 w=8 h=8 pal=3
+  label 告示牌
+  sprite 0 0 0x21
+
+type switch id=6 w=8 h=8 pal=2
+  label 开关
+  sprite 0 0 0x53
+
+type door id=7 w=8 h=16 pal=1
+  label 门
+  sprite 0 0 0x85
+  sprite 0 8 0x85

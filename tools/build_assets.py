@@ -47,4 +47,8 @@ for line in code.splitlines():
         h.append(line)
 h.append('#endif')
 open(os.path.join(out, 'assets.h'), 'w').write('\n'.join(h) + '\n')
+import scriptc
+import animc
+scriptc.write(src, out)
+animc.write(src, out)
 print('assets ->', out)

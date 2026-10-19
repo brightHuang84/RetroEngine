@@ -31,6 +31,8 @@ except ImportError:
 import re_data as data
 import re_synth
 import re_build
+import re_script_tab
+import re_anim_tab
 
 APP_FONT = 'WenQuanYi Micro Hei'
 
@@ -2387,11 +2389,13 @@ class MainWindow(QMainWindow):
         self.preview_tab = PreviewTab(self)
         self.code_tab = CodeTab(self)
         self.build_tab = BuildTab(self)
+        self.script_tab = re_script_tab.ScriptTab(self)
+        self.anim_tab = re_anim_tab.AnimTab(self)
         self.tabs = QTabWidget()
         for widget, title in (
             (self.tile_tab, '图块'), (self.palette_tab, '调色板'), (self.map_tab, '地图'),
             (self.music_tab, '音乐'), (self.preview_tab, '预览'), (self.code_tab, '代码'),
-            (self.build_tab, '编译'),
+            (self.build_tab, '编译'), (self.script_tab, '脚本'), (self.anim_tab, '动画'),
         ):
             self.tabs.addTab(widget, title)
         self.tabs.currentChanged.connect(self._tab)
@@ -2422,6 +2426,10 @@ class MainWindow(QMainWindow):
             self.preview_tab.refresh()
         if self.tabs.widget(index) is self.map_tab:
             self.map_tab.refresh()
+        if self.tabs.widget(index) is self.script_tab:
+            self.script_tab.refresh_context()
+        if self.tabs.widget(index) is self.anim_tab:
+            self.anim_tab.refresh()
 
     def touch(self):
         if not self.project:
@@ -2449,6 +2457,8 @@ class MainWindow(QMainWindow):
         self.preview_tab.load(project)
         self.code_tab.load(project)
         self.build_tab.load(project)
+        self.script_tab.load(project)
+        self.anim_tab.load(project)
         self.touch()
 
     def new_project(self):
@@ -2471,6 +2481,8 @@ class MainWindow(QMainWindow):
         if not self.project:
             return
         self.code_tab.flush()
+        self.script_tab.flush()
+        self.anim_tab.flush()
         try:
             self.project.save()
         except (OSError, ValueError) as exc:
@@ -2507,7 +2519,7 @@ def apply_style(app):
     app.setFont(QFont(APP_FONT, 10))
     app.setStyleSheet('''
         QWidget { background:#1e1e1e; color:#e8e8e8; }
-        QLineEdit, QSpinBox, QComboBox, QPlainTextEdit, QListWidget, QTableWidget {
+        QLineEdit, QSpinBox, QComboBox, QPlainTextEdit, QListWidget, QTableWidget, QTreeWidget {
             background:#2a2a2a; color:#eee; }
         QPushButton { background:#3a3a3a; border:1px solid #666; padding:4px 8px; }
         QHeaderView::section { background:#333; color:#ddd; }

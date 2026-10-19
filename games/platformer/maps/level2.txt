@@ -40,6 +40,9 @@ dddddddddddddddddddddddddddddddddd.......ddddddddddddddddddddddB
 dddddddddddddddddddddddddddddddddd.......ddddddddddddddddddddddB
 entities:
 player 16 192
+sign 48 192
+switch 64 192
+door 24 160
 coin 72 156
 coin 184 124
 coin 280 156

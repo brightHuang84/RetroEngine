@@ -1,0 +1,11 @@
+# 实体类型。一张地图最多 limit 个（不能超过 32）。
+limit 32
+
+type player id=1 w=8 h=16 pal=0
+  label 起点
+  sprite 0 0 0xA0
+  sprite 0 8 0xA1
+
+type coin id=2 w=8 h=8 pal=1
+  label 硬币
+  sprite 0 0 0xB0
